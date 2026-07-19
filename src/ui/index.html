@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Twin Tongue</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, system-ui, sans-serif; background: #f7f8fa; color: #172033; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #f7f8fa; }
+    main { width: min(820px, calc(100% - 28px)); margin: 0 auto; padding: 16px 0; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    h1 { margin: 0; font-size: clamp(1.4rem, 3vw, 1.7rem); letter-spacing: -.035em; }
+    .eyebrow { margin-bottom: 1px; color: #7b8495; text-transform: uppercase; letter-spacing: .11em; font-size: .58rem; font-weight: 700; }
+    .connection { display: flex; align-items: center; gap: 7px; color: #697386; font-size: .82rem; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #e5a12d; }
+    .connected .dot { background: #25a765; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 10px; padding: 3px; border-radius: 10px; background: #e9ecf1; }
+    .tabs button { flex: 1; }
+    .tabs button[aria-selected="true"] { color: #12673d; background: #fff; box-shadow: 0 1px 4px #1720331c; }
+    .tab-panel:focus { outline: none; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .languages { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 8px; }
+    .voice-selector { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 8px; padding: 10px 12px; border: 1px solid #e3e6eb; border-radius: 10px; background: #fff; }
+    .voice-selector legend { padding: 0; color: #606a7c; font-size: .78rem; font-weight: 650; }
+    .voice-options { display: flex; gap: 6px; }
+    .voice-option { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid #d9dde5; border-radius: 8px; color: #343d4e; font-size: .82rem; font-weight: 650; cursor: pointer; }
+    .voice-option:has(input:checked) { border-color: #8dd4aa; background: #e8f7ee; color: #12673d; }
+    .voice-option input { margin: 0; accent-color: #198754; }
+    .audio-devices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 8px; }
+    .language-field { display: grid; gap: 5px; padding: 10px 12px; border-radius: 10px; background: #fff; border: 1px solid #e3e6eb; }
+    .language-field label { color: #606a7c; font-size: .78rem; font-weight: 650; }
+    .device-field { display: grid; gap: 5px; padding: 10px 12px; border-radius: 10px; background: #fff; border: 1px solid #e3e6eb; }
+    .device-field label { color: #343d4e; font-size: .84rem; font-weight: 700; }
+    .device-fixed { display: flex; align-items: center; min-height: 36px; padding: 7px 9px; border: 1px solid #d9dde5; border-radius: 8px; background: #fff; color: #172033; }
+    .device-fixed .device-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .82rem; line-height: 1.2; }
+    .device-status { min-height: 1.2em; color: #687386; font-size: .75rem; }
+    .device-status.warning { color: #b54708; font-weight: 650; }
+    .virtual-routing { margin-top: 8px; padding: 12px; border: 1px solid #e3e6eb; border-radius: 10px; background: #fff; }
+    .virtual-routing h2 { margin-bottom: 10px; }
+    .routing-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .route-field { display: grid; align-content: start; gap: 8px; padding: 10px; border: 1px solid #e6e9ee; border-radius: 9px; background: #fafbfc; }
+    .route-heading { display: flex; align-items: center; gap: 8px; }
+    .route-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border-radius: 8px; background: #edf1f5; font-size: 1rem; }
+    .route-name { display: grid; gap: 2px; min-width: 0; color: #343d4e; font-size: .84rem; font-weight: 700; }
+    .route-cable { color: #7b8495; font-size: .7rem; font-weight: 700; letter-spacing: .06em; }
+    .application-list { display: grid; gap: 6px; min-height: 36px; }
+    .application { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 10px; border: 1px solid #bde8ce; border-radius: 8px; background: #e8f7ee; color: #12673d; font-size: .8rem; font-weight: 700; }
+    .application-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: #25a765; box-shadow: 0 0 0 3px #25a76520; }
+    .route-empty, .route-warning { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: 8px; font-size: .76rem; }
+    .route-empty { border: 1px dashed #d2d7df; color: #7b8495; }
+    .route-warning { border: 1px solid #f1c27d; background: #fff7e8; color: #92400e; font-weight: 650; }
+    .route-warning strong { display: block; margin-bottom: 2px; color: #7c2d12; }
+    .route-warning span:last-child { min-width: 0; }
+    select { width: 100%; border: 1px solid #d9dde5; border-radius: 8px; padding: 7px 9px; background: #fff; color: #172033; font: inherit; font-size: .82rem; cursor: pointer; }
+    select:focus { outline: 2px solid #25a76555; outline-offset: 1px; }
+    .card { padding: 13px; border: 1px solid #e3e6eb; border-radius: 10px; background: #fff; }
+    h2 { margin: 0 0 10px; font-size: .95rem; font-weight: 700; }
+    [hidden] { display: none !important; }
+    .choice { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border-radius: 9px; background: #f0f2f5; gap: 3px; }
+    .pipeline-gate { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 8px 10px; border-radius: 8px; background: #f5f7f9; color: #687386; font-size: .8rem; font-weight: 650; }
+    .pipeline-gate.failed { background: #fff4ed; color: #b54708; }
+    .spinner { width: 16px; height: 16px; flex: 0 0 auto; border: 2px solid #ccd2da; border-top-color: #25a765; border-radius: 50%; animation: spin .8s linear infinite; }
+    .pipeline-gate.failed .spinner { display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    button { border: 0; border-radius: 7px; padding: 8px; background: transparent; color: #6f7888; cursor: pointer; font: inherit; font-size: .84rem; font-weight: 650; transition: .15s ease; }
+    button:hover { color: #172033; background: #fff9; }
+    button.active { color: #12673d; background: #fff; box-shadow: 0 1px 4px #1720331c; }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    .mode { margin-top: 8px; display: flex; justify-content: space-between; gap: 10px; color: #7b8495; font-size: .76rem; }
+    .mode strong { color: #343d4e; }
+    .error { color: #b42318; margin-top: 8px; font-size: .82rem; }
+    .error:empty { display: none; }
+    .transcription-panel { min-height: 420px; padding: 14px; border: 1px solid #e3e6eb; border-radius: 10px; background: #fff; }
+    .transcription-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    .transcription-heading h2 { margin-bottom: 3px; }
+    .transcription-heading p { margin: 0; color: #7b8495; font-size: .78rem; }
+    .clear-transcription { flex: 0 0 auto; border: 1px solid #d9dde5; padding-inline: 10px; }
+    .transcription-empty { display: grid; place-items: center; min-height: 300px; color: #7b8495; text-align: center; font-size: .86rem; }
+    .transcription-list { display: grid; gap: 9px; max-height: 65vh; overflow-y: auto; }
+    .transcript-entry { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid #e3e6eb; border-radius: 9px; background: #fafbfc; overflow: hidden; }
+    .source-block, .translated-block { min-width: 0; padding: 11px 12px; }
+    .transcript-label { margin-bottom: 3px; color: #7b8495; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+    .transcript-text { margin: 0; color: #20293a; line-height: 1.45; }
+    .translated-block { border-left: 1px solid #e3e6eb; background: #f5fbf7; }
+    .translated-block .transcript-text { color: #12673d; }
+    .translation-pending { color: #8a94a5 !important; font-style: italic; }
+    .help-panel { display: grid; gap: 10px; }
+    .help-panel[hidden] { display: none; }
+    .help-intro { padding: 16px; border: 1px solid #bde8ce; border-radius: 10px; background: #f2fbf6; }
+    .help-intro h2 { margin-bottom: 5px; color: #12673d; font-size: 1.05rem; }
+    .help-intro p, .help-card p { margin: 0; color: #596477; font-size: .84rem; line-height: 1.55; }
+    .help-version { margin-top: 8px; color: #12673d; font-size: .75rem; font-weight: 700; }
+    .help-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .help-card { padding: 14px; border: 1px solid #e3e6eb; border-radius: 10px; background: #fff; }
+    .help-card h3 { margin: 0 0 8px; color: #2e3747; font-size: .9rem; }
+    .help-card ol, .help-card ul { display: grid; gap: 7px; margin: 0; padding-left: 20px; color: #596477; font-size: .82rem; line-height: 1.45; }
+    .help-notice { padding: 13px 14px; border: 1px solid #f1c27d; border-radius: 10px; background: #fff7e8; color: #7c2d12; font-size: .83rem; line-height: 1.5; }
+    .help-notice strong { display: block; margin-bottom: 3px; }
+    @media (max-width: 700px) { header { align-items: flex-start; } .grid, .languages, .audio-devices, .routing-grid, .transcript-entry, .help-grid { grid-template-columns: 1fr; } .translated-block { border-top: 1px solid #e3e6eb; border-left: 0; } .voice-selector { align-items: flex-start; flex-direction: column; } main { padding-top: 14px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div><div class="eyebrow">Control panel</div><h1>Twin Tongue</h1></div>
+      <div id="connection" class="connection"><span class="dot"></span><span>Conectando…</span></div>
+    </header>
+    <nav class="tabs" role="tablist" aria-label="Secciones del panel">
+      <button id="control-tab" role="tab" aria-selected="true" aria-controls="control-panel" data-tab="control-panel">Control</button>
+      <button id="transcription-tab" role="tab" aria-selected="false" aria-controls="transcription-panel" data-tab="transcription-panel">Transcripción</button>
+      <button id="help-tab" role="tab" aria-selected="false" aria-controls="help-panel" data-tab="help-panel">Ayuda</button>
+    </nav>
+    <section id="control-panel" class="tab-panel" role="tabpanel" aria-labelledby="control-tab">
+    <section class="languages" aria-label="Idiomas de la conversación">
+      <div class="language-field">
+        <label for="remote-language">💬 Idioma de la otra persona</label>
+        <select id="remote-language" data-role="remote"></select>
+      </div>
+      <div class="language-field">
+        <label for="agent-language">🗣️ Tu idioma (agente)</label>
+        <select id="agent-language" data-role="agent"></select>
+      </div>
+    </section>
+    <fieldset class="voice-selector">
+      <legend>Voz de la traducción</legend>
+      <div class="voice-options">
+        <label class="voice-option"><input type="radio" name="voice-gender" value="male"> Hombre</label>
+        <label class="voice-option"><input type="radio" name="voice-gender" value="female"> Mujer</label>
+      </div>
+    </fieldset>
+    <section class="audio-devices" aria-label="Micrófono y dispositivo de escucha del agente">
+      <div class="device-field">
+        <label>🔊 Tus altavoces o auriculares son:</label>
+        <div class="device-fixed" data-audio-direction="output" aria-live="polite"><span class="device-name">—</span></div>
+        <div class="device-status" aria-live="polite" hidden></div>
+      </div>
+      <div class="device-field">
+        <label>🎙️ Tu micrófono es:</label>
+        <div class="device-fixed" data-audio-direction="input" aria-live="polite"><span class="device-name">—</span></div>
+        <div class="device-status" aria-live="polite" hidden></div>
+      </div>
+    </section>
+    <section class="grid">
+      <article class="card" data-pipeline="remote_to_agent">
+        <h2>🎧 Audio que escuchas tú</h2>
+        <div class="pipeline-gate" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span>Cargando el sistema…</span></div>
+        <div class="choice" hidden>
+          <button data-mode="translate">Traducido</button><button data-mode="passthrough">Sin traducir</button>
+        </div>
+        <div class="mode"><span>Ahora escuchas</span><strong>—</strong></div>
+      </article>
+      <article class="card" data-pipeline="agent_to_remote">
+        <h2>📞 Audio que escucha la otra persona</h2>
+        <div class="pipeline-gate" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span>Cargando el sistema…</span></div>
+        <div class="choice" hidden>
+          <button data-mode="translate">Traducido</button><button data-mode="passthrough">Sin traducir</button>
+        </div>
+        <div class="mode"><span>Ahora escucha</span><strong>—</strong></div>
+      </article>
+    </section>
+    <section class="virtual-routing" aria-label="Conexiones VB-CABLE">
+      <h2>Conexiones de la llamada</h2>
+      <div class="routing-grid">
+        <div class="route-field" data-cable-route="remote_input">
+          <div class="route-heading"><span class="route-icon" aria-hidden="true">🔊</span><div class="route-name">Altavoz de la llamada<span class="route-cable">CABLE A</span></div></div>
+          <div class="application-list" aria-live="polite"></div>
+        </div>
+        <div class="route-field" data-cable-route="translated_output">
+          <div class="route-heading"><span class="route-icon" aria-hidden="true">🎙️</span><div class="route-name">Micrófono de la llamada<span class="route-cable">CABLE B</span></div></div>
+          <div class="application-list" aria-live="polite"></div>
+        </div>
+      </div>
+    </section>
+    </section>
+    <section id="transcription-panel" class="tab-panel transcription-panel" role="tabpanel" aria-labelledby="transcription-tab" hidden>
+      <div class="transcription-heading">
+        <div><h2>Transcripción del agente</h2><p>Frases finales reconocidas y texto que se sintetiza para el cliente.</p></div>
+        <button id="clear-transcription" class="clear-transcription" type="button">Limpiar</button>
+      </div>
+      <div id="transcription-empty" class="transcription-empty">Las frases aparecerán aquí cuando la traducción esté activa y empieces a hablar.</div>
+      <div id="transcription-list" class="transcription-list" aria-live="polite"></div>
+    </section>
+    <section id="help-panel" class="tab-panel help-panel" role="tabpanel" aria-labelledby="help-tab" hidden>
+      <div class="help-intro">
+        <h2>Cómo usar Twin Tongue</h2>
+        <p>El panel te permite decidir qué audio se traduce durante una llamada y comprobar lo que la herramienta ha entendido cuando hablas.</p>
+        <div class="help-version">Versión <span id="application-version">—</span></div>
+      </div>
+      <div class="help-grid">
+        <article class="help-card">
+          <h3>Antes de empezar</h3>
+          <ol>
+            <li>Comprueba que el panel indique <strong>Conectado</strong>.</li>
+            <li>Selecciona tu idioma y el de la otra persona.</li>
+            <li>Elige la voz de hombre o mujer para la traducción.</li>
+            <li>Inicia la llamada. Cuando esté activa, comprueba que la aplicación aparezca en las dos conexiones.</li>
+          </ol>
+        </article>
+        <article class="help-card">
+          <h3>Control de la conversación</h3>
+          <ul>
+            <li><strong>Audio que escuchas tú:</strong> elige si quieres oír a la otra persona traducida o sin traducir.</li>
+            <li><strong>Audio que escucha la otra persona:</strong> elige cómo quieres que reciba tu voz.</li>
+            <li>Cuando actives la traducción, espera al mensaje <strong>Listo: puedes empezar a hablar</strong>.</li>
+            <li>Si la traducción no está disponible, el panel mantiene activo el audio original.</li>
+          </ul>
+        </article>
+        <article class="help-card">
+          <h3>Para que te entienda mejor</h3>
+          <ul>
+            <li>Habla con un volumen alto y claro, sin alejarte demasiado del micrófono.</li>
+            <li>Usa frases claras y deja una pequeña pausa entre ideas.</li>
+            <li>Evita hablar a la vez que la otra persona siempre que sea posible.</li>
+            <li>Reduce el ruido de fondo y utiliza auriculares para evitar ecos.</li>
+          </ul>
+        </article>
+        <article class="help-card">
+          <h3>Revisar la transcripción</h3>
+          <p>La pestaña <strong>Transcripción</strong> muestra en dos columnas lo que la herramienta ha entendido y la traducción enviada a la otra persona. Úsala para detectar palabras confusas, repetir una frase o explicar una idea de otra manera. Puedes vaciar la lista con <strong>Limpiar</strong>.</p>
+        </article>
+      </div>
+      <div class="help-notice">
+        <strong>Ten en cuenta</strong>
+        La transcripción y la traducción pueden contener errores, especialmente con ruido, nombres propios, acentos muy marcados o si se habla demasiado bajo o rápido. La traducción tampoco es instantánea: escuchar, interpretar, traducir y reproducir una frase necesita unos segundos. Espera antes de repetirla y deja que la otra persona termine para mantener una conversación más fluida.
+      </div>
+    </section>
+    <div id="error" class="error" role="alert"></div>
+  </main>
+  <script>
+    const labels = { translate: "el audio traducido", passthrough: "el audio sin traducir" };
+    const statusLabels = {
+      starting: "Preparando el audio…",
+      system_loading: "Cargando el sistema · audio original activo",
+      switching: "Aplicando el cambio…",
+      initializing: "Preparando la traducción…",
+      translation_unavailable: "Traducción no disponible · audio original activo",
+      translation_ready: "Listo: puedes empezar a hablar",
+      passthrough: "el audio sin traducir",
+      error: "Error al preparar el audio"
+    };
+    const connection = document.querySelector("#connection");
+    const errorBox = document.querySelector("#error");
+
+    function render(state) {
+      document.querySelector("#application-version").textContent = state.application_version || "—";
+      renderTranscription(state);
+      for (const radio of document.querySelectorAll('input[name="voice-gender"]')) {
+        radio.checked = radio.value === state.voice_gender;
+      }
+      for (const select of document.querySelectorAll("select[data-role]")) {
+        if (!select.options.length) {
+          for (const language of state.supported_languages) {
+            select.add(new Option(language.label, language.code));
+          }
+        }
+        select.value = state.languages[select.dataset.role];
+      }
+      if (state.audio_devices) {
+        for (const display of document.querySelectorAll(".device-fixed[data-audio-direction]")) {
+          const device = state.audio_devices[display.dataset.audioDirection];
+          display.querySelector(".device-name").textContent = device.active_name || "Ningún dispositivo disponible";
+          const status = display.closest(".device-field").querySelector(".device-status");
+          status.textContent = "";
+          status.classList.toggle("warning", !device.active_name);
+          if (!device.active_name) {
+            status.textContent = "No hay ningún dispositivo de audio disponible";
+          }
+          status.hidden = !status.textContent;
+        }
+      }
+      if (state.virtual_cables) {
+        for (const field of document.querySelectorAll(".route-field")) {
+          const routeName = field.dataset.cableRoute;
+          const route = state.virtual_cables[routeName];
+          const pipelineName = routeName === "remote_input" ? "remote_to_agent" : "agent_to_remote";
+          const translationActive = state.pipelines[pipelineName]?.status === "translation_ready";
+          const applications = field.querySelector(".application-list");
+          applications.replaceChildren();
+          if (route.unavailable || (translationActive && !route.applications.length)) {
+            const warning = document.createElement("div");
+            warning.className = "route-warning";
+            const icon = document.createElement("span");
+            icon.setAttribute("aria-hidden", "true");
+            icon.textContent = "⚠️";
+            const message = document.createElement("span");
+            const title = document.createElement("strong");
+            title.textContent = route.unavailable ? "Cable no disponible" : "Traducción sin conexión";
+            const detail = document.createElement("span");
+            detail.textContent = route.unavailable
+              ? "Comprueba la instalación de VB-CABLE."
+              : routeName === "remote_input"
+                ? "Selecciona CABLE A como altavoz en la aplicación de llamada."
+                : "Selecciona CABLE B como micrófono en la aplicación de llamada.";
+            message.append(title, detail);
+            warning.append(icon, message);
+            applications.append(warning);
+          } else if (!route.applications.length) {
+            const empty = document.createElement("div");
+            empty.className = "route-empty";
+            empty.textContent = "○  Ninguna aplicación conectada";
+            applications.append(empty);
+          } else {
+            for (const application of route.applications) {
+              const item = document.createElement("div");
+              item.className = "application";
+              item.title = "Aplicación conectada a este cable";
+              const dot = document.createElement("span");
+              dot.className = "application-dot";
+              dot.setAttribute("aria-hidden", "true");
+              const name = document.createElement("span");
+              name.textContent = application.name;
+              item.append(dot, name);
+              applications.append(item);
+            }
+          }
+        }
+      }
+      for (const [name, pipeline] of Object.entries(state.pipelines)) {
+        const card = document.querySelector(`[data-pipeline="${name}"]`);
+        if (!card) continue;
+        const controlsReady = pipeline.running && ["passthrough", "translation_ready"].includes(pipeline.status);
+        const choice = card.querySelector(".choice");
+        const gate = card.querySelector(".pipeline-gate");
+        const failed = ["translation_unavailable", "error"].includes(pipeline.status);
+        choice.hidden = !controlsReady;
+        gate.hidden = controlsReady || !pipeline.running;
+        gate.classList.toggle("failed", failed);
+        gate.querySelector("span:last-child").textContent = failed
+          ? "No se pudo preparar la traducción. El audio original sigue activo."
+          : "Cargando el sistema… El audio original ya está activo.";
+        card.querySelector("strong").textContent = pipeline.running ? (statusLabels[pipeline.status] || labels[pipeline.mode]) : "Audio no iniciado";
+        for (const button of card.querySelectorAll("button")) {
+          button.classList.toggle("active", button.dataset.mode === pipeline.mode);
+          button.disabled = !controlsReady;
+        }
+      }
+    }
+
+    function renderTranscription(state) {
+      const list = document.querySelector("#transcription-list");
+      const empty = document.querySelector("#transcription-empty");
+      const entries = state.transcription?.entries || [];
+      list.replaceChildren();
+      empty.hidden = entries.length > 0;
+      const languageLabels = Object.fromEntries(state.supported_languages.map(item => [item.code, item.label]));
+      for (const entry of entries) {
+        const article = document.createElement("article");
+        article.className = "transcript-entry";
+        const source = document.createElement("div");
+        source.className = "source-block";
+        const sourceLabel = document.createElement("div");
+        sourceLabel.className = "transcript-label";
+        sourceLabel.textContent = `Has dicho · ${languageLabels[entry.source_language] || entry.source_language}`;
+        const sourceText = document.createElement("p");
+        sourceText.className = "transcript-text";
+        sourceText.textContent = entry.source_text;
+        source.append(sourceLabel, sourceText);
+        const translated = document.createElement("div");
+        translated.className = "translated-block";
+        const targetLabel = document.createElement("div");
+        targetLabel.className = "transcript-label";
+        targetLabel.textContent = `El cliente escucha · ${languageLabels[entry.target_language] || entry.target_language}`;
+        const targetText = document.createElement("p");
+        targetText.className = "transcript-text";
+        if (entry.translation_status === "complete") {
+          targetText.textContent = entry.translated_text;
+        } else if (entry.translation_status === "unavailable") {
+          targetText.textContent = "No llegó a traducirse.";
+          targetText.classList.add("translation-pending");
+        } else {
+          targetText.textContent = "Traduciendo…";
+          targetText.classList.add("translation-pending");
+        }
+        translated.append(targetLabel, targetText);
+        article.append(source, translated);
+        list.append(article);
+      }
+      if (entries.length) list.scrollTop = list.scrollHeight;
+    }
+
+    function setTab(panelId) {
+      for (const tab of document.querySelectorAll('[role="tab"]')) {
+        const selected = tab.dataset.tab === panelId;
+        tab.setAttribute("aria-selected", String(selected));
+        document.querySelector(`#${tab.dataset.tab}`).hidden = !selected;
+      }
+    }
+
+    async function clearTranscription() {
+      errorBox.textContent = "";
+      const button = document.querySelector("#clear-transcription");
+      button.disabled = true;
+      try {
+        const response = await fetch("/api/transcription", { method: "DELETE" });
+        const state = await response.json();
+        if (!response.ok) throw new Error(state.error || "No se pudo limpiar la transcripción.");
+        render(state);
+      } catch (error) {
+        errorBox.textContent = error.message;
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function setLanguage(role, language) {
+      errorBox.textContent = "";
+      const select = document.querySelector(`select[data-role="${role}"]`);
+      select.disabled = true;
+      try {
+        const response = await fetch(`/api/languages/${role}`, {
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ language })
+        });
+        const state = await response.json();
+        if (!response.ok) throw new Error(state.error || "No se pudo cambiar el idioma.");
+        render(state);
+      } catch (error) {
+        errorBox.textContent = error.message;
+      } finally {
+        select.disabled = false;
+      }
+    }
+
+    async function setVoiceGender(gender) {
+      errorBox.textContent = "";
+      const radios = document.querySelectorAll('input[name="voice-gender"]');
+      radios.forEach(radio => radio.disabled = true);
+      try {
+        const response = await fetch("/api/voice-gender", {
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ gender })
+        });
+        const state = await response.json();
+        if (!response.ok) throw new Error(state.error || "No se pudo cambiar la voz.");
+        render(state);
+      } catch (error) {
+        errorBox.textContent = error.message;
+      } finally {
+        radios.forEach(radio => radio.disabled = false);
+      }
+    }
+
+    async function setMode(name, mode) {
+      errorBox.textContent = "";
+      const buttons = document.querySelectorAll(`[data-pipeline="${name}"] button`);
+      buttons.forEach(button => button.disabled = true);
+      let completed = false;
+      try {
+        const response = await fetch(`/api/pipelines/${name}`, {
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode })
+        });
+        const state = await response.json();
+        if (!response.ok) throw new Error(state.error || "No se pudo cambiar el modo.");
+        render(state);
+        completed = true;
+      } catch (error) {
+        errorBox.textContent = error.message;
+      } finally {
+        if (!completed) buttons.forEach(button => button.disabled = false);
+      }
+    }
+
+    document.querySelectorAll(".card").forEach(card => {
+      card.querySelectorAll("button").forEach(button => button.addEventListener("click", () => setMode(card.dataset.pipeline, button.dataset.mode)));
+    });
+    document.querySelectorAll("select[data-role]").forEach(select => {
+      select.addEventListener("change", () => setLanguage(select.dataset.role, select.value));
+    });
+    document.querySelectorAll('input[name="voice-gender"]').forEach(radio => {
+      radio.addEventListener("change", () => {
+        if (radio.checked) setVoiceGender(radio.value);
+      });
+    });
+    document.querySelectorAll('[role="tab"]').forEach(tab => {
+      tab.addEventListener("click", () => setTab(tab.dataset.tab));
+    });
+    document.querySelector("#clear-transcription").addEventListener("click", clearTranscription);
+    fetch("/api/state").then(response => response.json()).then(render).catch(error => errorBox.textContent = error.message);
+    const events = new EventSource("/api/events");
+    events.onopen = () => { connection.classList.add("connected"); connection.querySelector("span:last-child").textContent = "Conectado"; };
+    events.onmessage = event => render(JSON.parse(event.data));
+    events.onerror = () => { connection.classList.remove("connected"); connection.querySelector("span:last-child").textContent = "Reconectando…"; };
+  </script>
+</body>
+</html>

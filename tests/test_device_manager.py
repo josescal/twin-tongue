@@ -1,0 +1,146 @@
+import asyncio
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import unittest
+from unittest.mock import patch
+
+from audio.device_manager import AudioDeviceManager, discover_audio_topology
+from audio.physical_devices import PhysicalDevice, discover_physical_devices
+from audio.windows_audio import CoreAudioEndpoint
+
+
+def device(
+    stable_id: str,
+    name: str,
+    index: int,
+    direction: str = "input",
+    default: bool = False,
+) -> PhysicalDevice:
+    return PhysicalDevice(stable_id, name, index, direction, default)  # type: ignore[arg-type]
+
+
+class AudioDeviceManagerPhysicalSelectionTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.temporary_directory = TemporaryDirectory()
+        self.preference_path = Path(self.temporary_directory.name) / "preferences.json"
+        self.manager = AudioDeviceManager(self.preference_path, 60)
+
+    async def asyncTearDown(self) -> None:
+        await self.manager.close()
+        self.temporary_directory.cleanup()
+
+    async def refresh_with(self, devices: list[PhysicalDevice]) -> None:
+        with patch(
+            "audio.device_manager.discover_audio_topology",
+            return_value=(devices, []),
+        ):
+            await self.manager.refresh(force_sessions=True)
+
+    async def test_startup_uses_independent_automatic_communications_defaults(self) -> None:
+        await self.refresh_with([
+            device("mic-realtek", "Micrófono integrado", 7, default=True),
+            device("mic-jabra", "Jabra Evolve2", 11),
+            device("speaker-realtek", "Altavoces del equipo", 8, "output"),
+            device("speaker-jabra", "Jabra Evolve2", 12, "output", True),
+        ])
+
+        snapshot = self.manager.snapshot()["audio_devices"]
+        self.assertEqual("Micrófono integrado", snapshot["input"]["active_name"])
+        self.assertEqual("Jabra Evolve2", snapshot["output"]["active_name"])
+
+    async def test_usb_or_bluetooth_connection_and_default_change_switch_automatic(self) -> None:
+        await self.refresh_with([
+            device("mic-realtek", "Micrófono integrado", 7, default=True),
+            device("speaker-realtek", "Altavoces", 8, "output", True),
+        ])
+        initial_revision = self.manager.revision("input")
+        change = asyncio.create_task(
+            self.manager.wait_for_change("input", initial_revision)
+        )
+        await asyncio.sleep(0)
+        await self.refresh_with([
+            device("mic-realtek", "Micrófono integrado", 9),
+            device("mic-headset", "Cascos Bluetooth", 13, default=True),
+            device("speaker-realtek", "Altavoces", 10, "output"),
+            device("speaker-headset", "Cascos Bluetooth", 14, "output", True),
+        ])
+
+        self.assertGreater(await asyncio.wait_for(change, 1), initial_revision)
+        self.assertEqual(13, self.manager.active_index("input"))
+        self.assertEqual(14, self.manager.active_index("output"))
+
+    async def test_only_voice_gender_is_persisted_and_survives_restart(self) -> None:
+        self.manager.set_voice_gender("female")
+        saved = json.loads(self.preference_path.read_text(encoding="utf-8"))
+        self.assertEqual({"voice_gender": "female"}, saved)
+
+        restarted = AudioDeviceManager(self.preference_path, 60)
+        self.assertEqual("female", restarted.voice_gender)
+
+    async def test_legacy_preferences_use_the_configured_voice_default(self) -> None:
+        self.preference_path.write_text(
+            json.dumps({
+                "input": {"mode": "automatic", "stable_id": None, "name": None},
+                "output": {"mode": "automatic", "stable_id": None, "name": None},
+            }),
+            encoding="utf-8",
+        )
+
+        manager = AudioDeviceManager(
+            self.preference_path, 60, default_voice_gender="female"
+        )
+
+        self.assertEqual("female", manager.voice_gender)
+        saved = json.loads(self.preference_path.read_text(encoding="utf-8"))
+        self.assertEqual({"voice_gender": "female"}, saved)
+
+    async def test_application_sessions_are_refreshed_less_often_than_topology(self) -> None:
+        with patch(
+            "audio.device_manager.discover_audio_topology",
+            return_value=([], []),
+        ) as discover:
+            await self.manager.refresh(force_sessions=True)
+            await self.manager.refresh()
+
+        self.assertEqual([True, False], [call.args[0] for call in discover.call_args_list])
+
+
+class PhysicalDeviceDiscoveryTests(unittest.TestCase):
+    def test_vb_cable_is_hidden_and_core_audio_id_is_used(self) -> None:
+        portaudio_devices = [
+            {"name": "CABLE-A Output (VB-Audio Virtual Cable A)", "hostapi": 0, "max_input_channels": 2, "max_output_channels": 0},
+            {"name": "Micrófono (Realtek Audio)", "hostapi": 0, "max_input_channels": 2, "max_output_channels": 0},
+        ]
+        endpoints = [
+            CoreAudioEndpoint("endpoint-cable", "CABLE-A Output (VB-Audio Virtual Cable A)", "input"),
+            CoreAudioEndpoint("endpoint-mic", "Micrófono (Realtek Audio)", "input", True),
+        ]
+        discovered = discover_physical_devices(
+            portaudio_devices,
+            [{"name": "Windows WASAPI"}],
+            endpoints,
+        )
+
+        self.assertEqual(1, len(discovered))
+        self.assertEqual("coreaudio:endpoint-mic", discovered[0].stable_id)
+        self.assertNotIn("VB-Audio", discovered[0].name)
+
+    def test_unified_discovery_enumerates_each_backend_once(self) -> None:
+        with (
+            patch("audio.device_manager.query_devices", return_value=[]) as devices,
+            patch("audio.device_manager.query_host_apis", return_value=[]) as host_apis,
+            patch(
+                "audio.device_manager.query_core_audio_endpoints",
+                return_value=[],
+            ) as endpoints,
+        ):
+            discover_audio_topology(include_sessions=False)
+
+        devices.assert_called_once_with()
+        host_apis.assert_called_once_with()
+        endpoints.assert_called_once_with()
+
+
+if __name__ == "__main__":
+    unittest.main()

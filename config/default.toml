@@ -1,0 +1,127 @@
+[audio]
+processing_sample_rate = 16000
+sample_format = "int16"
+frame_duration_ms = 20
+device_poll_interval_seconds = 1.5
+
+[audio.resampling]
+backend = "soxr"
+quality = "HQ"
+
+[voice_detection]
+backend = "silero"
+
+[voice_detection.silero]
+runtime = "onnx"
+opset_version = 16
+
+[languages]
+agent = "es"
+remote = "en"
+
+[pipelines.remote_to_agent]
+enabled = true
+mode = "passthrough"
+input_device = "Windows WASAPI::CABLE-A Output (VB-Audio Virtual Cable A)"
+input_sample_rate = 48000
+input_channels = 2
+output_device = "Windows WASAPI::Realtek HD Audio 2nd output (Realtek(R) Audio)"
+output_channels = 1
+output_sample_rate = 48000
+stt_max_audio_catchup_ms = 100
+
+[pipelines.remote_to_agent.latency_protection]
+enabled = true
+playback_backlog_discard_age_seconds = 8.0
+segment_discard_age_seconds = 15.0
+playback_backlog_segments_to_keep = 2
+
+[pipelines.remote_to_agent.voice_detection]
+threshold = 0.50
+min_silence_duration_ms = 350
+preroll_ms = 200
+
+[pipelines.remote_to_agent.segmentation]
+minimum_segment_duration_ms = 1500
+preferred_segment_duration_ms = 2500
+short_pause_duration_ms = 150
+partial_boundary_stability_ms = 200
+maximum_segment_duration_ms = 5000
+
+[pipelines.agent_to_remote]
+enabled = true
+mode = "passthrough"
+input_device = "Windows WASAPI::Micrófono (Realtek(R) Audio)"
+input_sample_rate = 48000
+input_channels = 1
+output_device = "Windows WASAPI::CABLE-B Input (VB-Audio Virtual Cable B)"
+output_channels = 2
+output_sample_rate = 48000
+stt_max_audio_catchup_ms = 100
+
+[pipelines.agent_to_remote.latency_protection]
+enabled = true
+playback_backlog_discard_age_seconds = 8.0
+segment_discard_age_seconds = 15.0
+playback_backlog_segments_to_keep = 2
+
+[pipelines.agent_to_remote.voice_detection]
+threshold = 0.35
+min_silence_duration_ms = 500
+preroll_ms = 300
+
+[pipelines.agent_to_remote.segmentation]
+minimum_segment_duration_ms = 1500
+preferred_segment_duration_ms = 2500
+short_pause_duration_ms = 150
+partial_boundary_stability_ms = 200
+maximum_segment_duration_ms = 5000
+
+[providers]
+stt = "elevenlabs"
+translation = "google_translate_basic_v2"
+tts = "elevenlabs"
+
+[stt]
+model = "scribe_v2_realtime"
+audio_format = "pcm_16000"
+sample_rate = 16000
+include_timestamps = false
+queue_capacity_blocks = 50
+idle_keepalive_seconds = 5.0
+
+[translation]
+endpoint = "https://translation.googleapis.com/language/translate/v2"
+format = "text"
+
+[tts]
+model = "eleven_flash_v2_5"
+voice_id = "851ejYcv2BoNPjrkw93G"
+voice_gender = "male"
+output_format = "pcm_16000"
+sample_rate = 16000
+speed = 1.1
+
+[tts.language_voices]
+en = { male = "JBFqnCBsd6RMkjVDRZzb", female = "LudcwvHIZaqQOcQfVZSY" }
+fr = { male = "aQROLel5sQbj1vuIVi6B", female = "LudcwvHIZaqQOcQfVZSY" }
+es = { male = "851ejYcv2BoNPjrkw93G", female = "LudcwvHIZaqQOcQfVZSY" }
+ca = { male = "851ejYcv2BoNPjrkw93G", female = "LudcwvHIZaqQOcQfVZSY" }
+
+[tts.language_models]
+ca = "eleven_v3"
+
+[logging]
+level = "INFO"
+log_file = "logs/twin-tongue.log"
+log_size_mb = 5
+log_max_files = 5
+log_queue_capacity = 1000
+metrics_file = "logs/metrics.csv"
+metrics_retention_days = 14
+metrics_interval_seconds = 60.0
+
+[server]
+enabled = true
+host = "127.0.0.1"
+port = 8765

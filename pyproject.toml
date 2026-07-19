@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "twin-tongue"
+dynamic = ["version"]
+description = "Bidirectional real-time audio translation for Windows"
+requires-python = ">=3.12"
+dependencies = [
+    "elevenlabs>=2.58.0,<3",
+    "httpx>=0.28,<1",
+    "numpy>=2.3,<3",
+    "onnxruntime>=1.16.1,<2",
+    "python-dotenv>=1.2,<2",
+    "sounddevice>=0.5.5,<0.6",
+    "soxr>=1.1.0,<2",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.17,<7"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["app_state", "config", "metrics", "twin_tongue_version"]
+
+[tool.setuptools.dynamic]
+version = {attr = "twin_tongue_version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ui = ["index.html"]
+audio = ["models/*.onnx", "models/LICENSE"]
