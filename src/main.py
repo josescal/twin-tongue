@@ -117,11 +117,14 @@ async def run_application(args: argparse.Namespace) -> None:
     barge_in_settings = agent_settings["barge_in"]
     assert isinstance(barge_in_settings, dict)
     device_manager = AudioDeviceManager(
-        PROJECT_ROOT / "config" / "audio-device-preferences.json",
+        PROJECT_ROOT / "config" / "preferences.json",
         poll_interval_seconds=float(
             audio_settings.get("device_poll_interval_seconds", 5.0)
         ),
-        default_voice_gender=str(config["tts"]["voice_gender"]),
+        default_voice_genders={
+            "remote_to_agent": str(remote_settings["voice_gender"]),
+            "agent_to_remote": str(agent_settings["voice_gender"]),
+        },
         default_ui_language="en",
     )
     try:
@@ -134,7 +137,7 @@ async def run_application(args: argparse.Namespace) -> None:
                 "agent": device_manager.participant_languages["agent"],
                 "remote": device_manager.participant_languages["remote"],
             },
-            initial_voice_gender=device_manager.voice_gender,
+            initial_voice_genders=device_manager.voice_genders,
             initial_ui_language=device_manager.ui_language,
             audio_recording_enabled=bool(audio_capture_settings["enabled"]),
             active_pipelines=selected_names,
@@ -167,8 +170,6 @@ async def run_application(args: argparse.Namespace) -> None:
             config=config,
             provider_factory=provider_factory,
             voice_detector_loader=voice_detector_loader,
-            input_device=remote_settings["input_device"],
-            output_device=remote_settings["output_device"],
             duration=duration,
             startup_barrier=startup_barrier,
             control_state=control_state,
@@ -180,8 +181,6 @@ async def run_application(args: argparse.Namespace) -> None:
             config=config,
             provider_factory=provider_factory,
             voice_detector_loader=voice_detector_loader,
-            input_device=agent_settings["input_device"],
-            output_device=agent_settings["output_device"],
             duration=duration,
             startup_barrier=startup_barrier,
             control_state=control_state,

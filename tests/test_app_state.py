@@ -178,21 +178,33 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
             await state.set_ui_language("fr")
 
     async def test_voice_gender_change_is_published(self) -> None:
-        state = ApplicationState(initial_voice_gender="male")
+        state = ApplicationState(
+            initial_voice_genders={
+                "remote_to_agent": "male",
+                "agent_to_remote": "female",
+            }
+        )
 
         async with state.subscribe() as updates:
-            snapshot = await state.set_voice_gender("female")
+            snapshot = await state.set_voice_gender("remote_to_agent", "female")
             published = await updates.get()
 
-        self.assertEqual(VoiceGender.FEMALE, state.get_voice_gender())
-        self.assertEqual("female", snapshot["voice_gender"])
+        self.assertEqual(
+            VoiceGender.FEMALE, state.get_voice_gender("remote_to_agent")
+        )
+        self.assertEqual(
+            VoiceGender.FEMALE, state.get_voice_gender("agent_to_remote")
+        )
+        self.assertEqual(
+            "female", snapshot["pipelines"]["remote_to_agent"]["voice_gender"]
+        )
         self.assertEqual(snapshot, published)
 
     async def test_invalid_voice_gender_is_rejected(self) -> None:
         state = ApplicationState()
 
         with self.assertRaisesRegex(ValueError, "Invalid voice gender"):
-            await state.set_voice_gender("neutral")
+            await state.set_voice_gender("remote_to_agent", "neutral")
 
     async def test_final_and_translation_are_published_with_their_direction(self) -> None:
         state = ApplicationState()

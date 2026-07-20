@@ -136,6 +136,31 @@ class LocalControlServer:
                     payload["mode"],
                 )
                 await self._write_json(writer, 200, snapshot)
+            elif (
+                method == "PUT"
+                and path.startswith("/api/pipelines/")
+                and path.endswith("/voice-gender")
+            ):
+                name = path.removeprefix("/api/pipelines/").removesuffix(
+                    "/voice-gender"
+                )
+                payload = self._decode_json(body)
+                if not isinstance(payload.get("gender"), str):
+                    raise HttpRequestError(
+                        400, "The JSON body must contain a string 'gender'."
+                    )
+                try:
+                    snapshot = await self._state.set_voice_gender(
+                        name, payload["gender"]
+                    )
+                except ValueError as error:
+                    raise HttpRequestError(400, str(error)) from error
+                LOGGER.info(
+                    "event=control_changed setting=voice_gender pipeline=%s value=%s",
+                    name,
+                    payload["gender"],
+                )
+                await self._write_json(writer, 200, snapshot)
             elif method == "PUT" and path.startswith("/api/pipelines/"):
                 name = path.removeprefix("/api/pipelines/")
                 payload = self._decode_json(body)
@@ -181,21 +206,6 @@ class LocalControlServer:
                 LOGGER.info(
                     "event=control_changed setting=ui_language value=%s",
                     payload["language"],
-                )
-                await self._write_json(writer, 200, snapshot)
-            elif method == "PUT" and path == "/api/voice-gender":
-                payload = self._decode_json(body)
-                if not isinstance(payload.get("gender"), str):
-                    raise HttpRequestError(
-                        400, "The JSON body must contain a string 'gender'."
-                    )
-                try:
-                    snapshot = await self._state.set_voice_gender(payload["gender"])
-                except ValueError as error:
-                    raise HttpRequestError(400, str(error)) from error
-                LOGGER.info(
-                    "event=control_changed setting=voice_gender value=%s",
-                    payload["gender"],
                 )
                 await self._write_json(writer, 200, snapshot)
             elif method == "PUT" and path.startswith("/api/audio-devices/"):

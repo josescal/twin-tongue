@@ -6,10 +6,14 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from metrics import CsvMetricsWriter
+from metrics import METRIC_FIELDS, CsvMetricsWriter
 
 
 class CsvMetricsWriterTests(unittest.TestCase):
+    def test_time_fields_use_milliseconds(self) -> None:
+        self.assertFalse(any(field.endswith("_seconds") for field in METRIC_FIELDS))
+        self.assertTrue(any(field.endswith("_ms") for field in METRIC_FIELDS))
+
     def test_writes_one_header_and_processable_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "metrics.csv"

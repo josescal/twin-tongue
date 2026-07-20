@@ -38,7 +38,6 @@ def _config() -> dict[str, object]:
         "tts": {
             "model": "eleven_flash_v2_5",
             "voice_id": "default-voice",
-            "voice_gender": "male",
             "output_format": "pcm_16000",
             "sample_rate": 16_000,
             "speed": 1.1,

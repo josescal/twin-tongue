@@ -22,8 +22,6 @@ def _pipeline() -> RemoteToAgentPipeline:
         config={},
         provider_factory=Mock(spec=ProviderFactory),
         voice_detector_loader=Mock(spec=VoiceDetectorLoader),
-        input_device=0,
-        output_device=0,
     )
 
 
@@ -38,6 +36,19 @@ def _synthesis(created_at: float) -> TimedSynthesis:
 
 
 class RealtimePipelineTests(unittest.TestCase):
+    def test_each_pipeline_uses_its_own_voice_gender(self) -> None:
+        pipeline = _pipeline()
+        pipeline.control_state = ApplicationState(
+            initial_voice_genders={
+                "remote_to_agent": "female",
+                "agent_to_remote": "male",
+            }
+        )
+
+        self.assertEqual("female", pipeline._current_voice_gender())
+        pipeline.pipeline_name = "agent_to_remote"
+        self.assertEqual("male", pipeline._current_voice_gender())
+
     def test_recording_is_automatic_for_translation_and_manual_for_passthrough(self) -> None:
         pipeline = _pipeline()
         pipeline._audio_recording_enabled = True

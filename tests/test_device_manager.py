@@ -71,16 +71,20 @@ class AudioDeviceManagerPhysicalSelectionTests(unittest.IsolatedAsyncioTestCase)
         self.assertEqual(14, self.manager.active_index("output"))
 
     async def test_preferences_are_persisted_and_survive_restart(self) -> None:
-        self.manager.set_voice_gender("female")
+        self.manager.set_voice_gender("remote_to_agent", "female")
         self.manager.set_ui_language("es")
         self.manager.set_participant_language("remote", "fr")
         saved = json.loads(self.preference_path.read_text(encoding="utf-8"))
-        self.assertEqual("female", saved["voice_gender"])
+        self.assertEqual(
+            {"remote_to_agent": "female", "agent_to_remote": "male"},
+            saved["voice_genders"],
+        )
         self.assertEqual("es", saved["ui_language"])
         self.assertEqual({"agent": "es", "remote": "fr"}, saved["languages"])
 
         restarted = AudioDeviceManager(self.preference_path, 60)
-        self.assertEqual("female", restarted.voice_gender)
+        self.assertEqual("female", restarted.voice_genders["remote_to_agent"])
+        self.assertEqual("male", restarted.voice_genders["agent_to_remote"])
         self.assertEqual("es", restarted.ui_language)
         self.assertEqual({"agent": "es", "remote": "fr"}, restarted.participant_languages)
 
@@ -101,7 +105,7 @@ class AudioDeviceManagerPhysicalSelectionTests(unittest.IsolatedAsyncioTestCase)
         saved = json.loads(self.preference_path.read_text(encoding="utf-8"))
         self.assertEqual(
             {"mode": "manual", "stable_id": "mic-headset", "name": "Headset microphone"},
-            saved["input"],
+            saved["audio_devices"]["input"],
         )
         restarted = AudioDeviceManager(self.preference_path, 60)
         with patch(
@@ -125,24 +129,44 @@ class AudioDeviceManagerPhysicalSelectionTests(unittest.IsolatedAsyncioTestCase)
         snapshot = self.manager.snapshot()["audio_devices"]["input"]
         self.assertEqual("automatic", snapshot["selection"])
         saved = json.loads(self.preference_path.read_text(encoding="utf-8"))
-        self.assertEqual("automatic", saved["input"]["mode"])
+        self.assertEqual("automatic", saved["audio_devices"]["input"]["mode"])
 
-    async def test_legacy_preferences_use_the_configured_voice_default(self) -> None:
-        self.preference_path.write_text(
-            json.dumps({
-                "input": {"mode": "automatic", "stable_id": None, "name": None},
-                "output": {"mode": "automatic", "stable_id": None, "name": None},
-            }),
-            encoding="utf-8",
-        )
+    async def test_unavailable_preference_warns_and_uses_the_current_default(self) -> None:
+        await self.refresh_with([
+            device("mic-default", "Integrated microphone", 7, default=True),
+            device("mic-headset", "Headset microphone", 11),
+        ])
+        await self.manager.set_physical_device("input", "mic-headset")
 
+        with self.assertLogs("audio.physical_devices", level="WARNING") as captured:
+            await self.refresh_with([
+                device("mic-default", "Integrated microphone", 9, default=True),
+            ])
+
+        snapshot = self.manager.snapshot()["audio_devices"]["input"]
+        self.assertFalse(snapshot["preferred_available"])
+        self.assertEqual("Headset microphone", snapshot["preferred_name"])
+        self.assertEqual("Integrated microphone", snapshot["active_name"])
+        self.assertEqual(9, self.manager.active_index("input"))
+        self.assertIn("fallback=Integrated microphone", captured.output[0])
+
+    async def test_configured_voice_defaults_are_independent(self) -> None:
+        preference_path = Path(self.temporary_directory.name) / "voice-defaults.json"
         manager = AudioDeviceManager(
-            self.preference_path, 60, default_voice_gender="female"
+            preference_path,
+            60,
+            default_voice_genders={
+                "remote_to_agent": "female",
+                "agent_to_remote": "male",
+            },
         )
 
-        self.assertEqual("female", manager.voice_gender)
-        saved = json.loads(self.preference_path.read_text(encoding="utf-8"))
-        self.assertEqual("female", saved["voice_gender"])
+        self.assertEqual(
+            {"remote_to_agent": "female", "agent_to_remote": "male"},
+            manager.voice_genders,
+        )
+        saved = json.loads(preference_path.read_text(encoding="utf-8"))
+        self.assertEqual(manager.voice_genders, saved["voice_genders"])
         self.assertEqual("en", saved["ui_language"])
         self.assertEqual({"agent": "es", "remote": "en"}, saved["languages"])
 

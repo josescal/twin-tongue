@@ -26,6 +26,7 @@ from audio.virtual_cables import (
     virtual_cable_snapshot,
 )
 from audio.windows_audio import query_core_audio_endpoints
+from preferences import PipelineName, UserPreferences
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_POLL_INTERVAL_SECONDS = 5.0
@@ -41,7 +42,7 @@ class AudioDeviceManager:
         preference_path: Path,
         poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
         session_poll_interval_seconds: float = DEFAULT_SESSION_POLL_INTERVAL_SECONDS,
-        default_voice_gender: str = "male",
+        default_voice_genders: dict[str, str] | None = None,
         default_ui_language: str = "en",
         default_participant_languages: dict[str, str] | None = None,
     ) -> None:
@@ -51,12 +52,13 @@ class AudioDeviceManager:
             raise ValueError("Audio session poll interval must be greater than zero.")
         self.poll_interval_seconds = poll_interval_seconds
         self.session_poll_interval_seconds = session_poll_interval_seconds
-        self._physical = PhysicalDeviceSelection(
+        self._preferences = UserPreferences(
             preference_path,
-            default_voice_gender=default_voice_gender,
+            default_voice_genders=default_voice_genders,
             default_ui_language=default_ui_language,
             default_participant_languages=default_participant_languages,
         )
+        self._physical = PhysicalDeviceSelection(self._preferences)
         self._cables: list[VirtualCablePair] = []
         self._revisions: dict[DeviceKey, int] = {
             "input": 0,
@@ -136,25 +138,25 @@ class AudioDeviceManager:
             await self._on_change()
 
     @property
-    def voice_gender(self) -> str:
-        return self._physical.voice_gender
+    def voice_genders(self) -> dict[PipelineName, str]:
+        return self._preferences.voice_genders
 
     @property
     def ui_language(self) -> str:
-        return self._physical.ui_language
+        return self._preferences.ui_language
 
     @property
     def participant_languages(self) -> dict[str, str]:
-        return self._physical.participant_languages
+        return self._preferences.participant_languages
 
-    def set_voice_gender(self, gender: str) -> None:
-        self._physical.set_voice_gender(gender)
+    def set_voice_gender(self, pipeline: PipelineName, gender: str) -> None:
+        self._preferences.set_voice_gender(pipeline, gender)
 
     def set_ui_language(self, language: str) -> None:
-        self._physical.set_ui_language(language)
+        self._preferences.set_ui_language(language)
 
     def set_participant_language(self, role: str, language: str) -> None:
-        self._physical.set_participant_language(role, language)
+        self._preferences.set_participant_language(role, language)
 
     async def set_physical_device(
         self, direction: SelectionDirection, selection: str

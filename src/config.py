@@ -288,10 +288,9 @@ SUPPORTED_LANGUAGE_CODES = {"en", "es", "fr", "ca"}
 REQUIRED_PIPELINE_KEYS = (
     "enabled",
     "mode",
-    "input_device",
+    "voice_gender",
     "input_sample_rate",
     "input_channels",
-    "output_device",
     "output_channels",
     "output_sample_rate",
     "stt_max_audio_catchup_ms",
@@ -337,7 +336,6 @@ REQUIRED_TRANSLATION_KEYS = (
 REQUIRED_TTS_KEYS = (
     "model",
     "voice_id",
-    "voice_gender",
     "output_format",
     "sample_rate",
     "speed",
@@ -523,9 +521,6 @@ def load_config(path: Path) -> dict[str, Any]:
     language_voices = config["tts"]["language_voices"]
     if not isinstance(language_voices, dict):
         raise ConfigurationError("tts.language_voices must be a mapping.")
-    voice_gender = config["tts"]["voice_gender"]
-    if voice_gender not in {"male", "female"}:
-        raise ConfigurationError("tts.voice_gender must be 'male' or 'female'.")
     for language, voices in language_voices.items():
         if language not in SUPPORTED_LANGUAGE_CODES:
             raise ConfigurationError(f"Unsupported TTS language voice override: {language}.")
@@ -613,6 +608,10 @@ def load_config(path: Path) -> dict[str, Any]:
         if config["pipelines"][name]["mode"] not in {"translate", "passthrough"}:
             raise ConfigurationError(
                 f"pipelines.{name}.mode must be 'translate' or 'passthrough'."
+            )
+        if config["pipelines"][name]["voice_gender"] not in {"male", "female"}:
+            raise ConfigurationError(
+                f"pipelines.{name}.voice_gender must be 'male' or 'female'."
             )
         output_rate = config["pipelines"][name]["output_sample_rate"]
         if not isinstance(output_rate, int) or isinstance(output_rate, bool) or output_rate <= 0:

@@ -22,7 +22,7 @@ build = ["pyinstaller>=6.17,<7"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-py-modules = ["app_state", "config", "metrics", "twin_tongue_version"]
+py-modules = ["app_state", "config", "metrics", "preferences", "twin_tongue_version"]
 
 [tool.setuptools.dynamic]
 version = {attr = "twin_tongue_version.__version__"}

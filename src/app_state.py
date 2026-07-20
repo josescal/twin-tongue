@@ -63,7 +63,7 @@ class ApplicationState:
         self,
         initial_modes: dict[str, str] | None = None,
         initial_languages: dict[str, str] | None = None,
-        initial_voice_gender: str = VoiceGender.MALE,
+        initial_voice_genders: dict[str, str] | None = None,
         initial_ui_language: str = "en",
         audio_recording_enabled: bool = False,
         active_pipelines: tuple[str, ...] = PIPELINE_NAMES,
@@ -91,7 +91,11 @@ class ApplicationState:
             if language not in SUPPORTED_LANGUAGES:
                 raise ValueError(f"Unsupported language '{language}' for {role}")
             self._languages[role] = language
-        self._voice_gender = VoiceGender(initial_voice_gender)
+        requested_voice_genders = initial_voice_genders or {}
+        self._voice_genders: dict[PipelineName, VoiceGender] = {
+            name: VoiceGender(requested_voice_genders.get(name, VoiceGender.MALE))
+            for name in PIPELINE_NAMES
+        }
         self._ui_language = self._parse_ui_language(initial_ui_language)
         self._audio_recording_enabled = bool(audio_recording_enabled)
         self._manual_audio_recording = False
@@ -111,7 +115,10 @@ class ApplicationState:
     def attach_device_manager(self, manager: AudioDeviceManager) -> None:
         """Expose physical devices, virtual routes, and persisted preferences."""
         self._device_manager = manager
-        self._voice_gender = VoiceGender(manager.voice_gender)
+        self._voice_genders = {
+            name: VoiceGender(gender)
+            for name, gender in manager.voice_genders.items()
+        }
         self._ui_language = self._parse_ui_language(manager.ui_language)
         for role, language in manager.participant_languages.items():
             if role in LANGUAGE_ROLES and language in SUPPORTED_LANGUAGES:
@@ -135,7 +142,6 @@ class ApplicationState:
                 {"code": code, "label": label}
                 for code, label in SUPPORTED_LANGUAGES.items()
             ],
-            "voice_gender": self._voice_gender.value,
             "audio_recording": {
                 "enabled": self._audio_recording_enabled,
                 "active": self.is_audio_recording_active(),
@@ -153,6 +159,7 @@ class ApplicationState:
             "pipelines": {
                 name: {
                     "mode": self._modes[name].value,
+                    "voice_gender": self._voice_genders[name].value,
                     "running": name in self._active_pipelines,
                     "status": self._statuses[name].value,
                 }
@@ -204,14 +211,15 @@ class ApplicationState:
             self._ui_language = parsed_language
             return self._publish_change()
 
-    def get_voice_gender(self) -> VoiceGender:
+    def get_voice_gender(self, name: str) -> VoiceGender:
         """Return the voice gender used for new synthesis requests."""
-        return self._voice_gender
+        return self._voice_genders[self._parse_pipeline_name(name)]
 
     async def set_voice_gender(
-        self, gender: str | VoiceGender
+        self, name: str, gender: str | VoiceGender
     ) -> dict[str, object]:
         """Change the synthesized voice and notify realtime subscribers."""
+        parsed_name = self._parse_pipeline_name(name)
         try:
             parsed_gender = VoiceGender(gender)
         except ValueError as error:
@@ -220,11 +228,11 @@ class ApplicationState:
                 f"Invalid voice gender '{gender}'; expected one of: {choices}"
             ) from error
         async with self._lock:
-            if self._voice_gender is parsed_gender:
+            if self._voice_genders[parsed_name] is parsed_gender:
                 return self.snapshot()
             if self._device_manager is not None:
-                self._device_manager.set_voice_gender(parsed_gender.value)
-            self._voice_gender = parsed_gender
+                self._device_manager.set_voice_gender(parsed_name, parsed_gender.value)
+            self._voice_genders[parsed_name] = parsed_gender
             return self._publish_change()
 
     async def set_audio_device(

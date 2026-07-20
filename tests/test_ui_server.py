@@ -93,7 +93,8 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Altavoz de la llamada", decoded_page)
         self.assertIn("Call microphone", decoded_page)
         self.assertIn("Micrófono de la llamada", decoded_page)
-        self.assertIn('name="voice-gender"', decoded_page)
+        self.assertIn('name="voice-gender-remote_to_agent"', decoded_page)
+        self.assertIn('name="voice-gender-agent_to_remote"', decoded_page)
         self.assertIn('class="settings-panel"', decoded_page)
         self.assertIn('id="all-translation-button"', decoded_page)
         self.assertNotIn('data-i18n="youHear"', decoded_page)
@@ -125,7 +126,9 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('id="help-tab"', decoded_page)
         self.assertIn('id="help-panel"', decoded_page)
         self.assertIn("How to use Twin Tongue", decoded_page)
-        self.assertNotIn("The saved device is unavailable", decoded_page)
+        self.assertIn("The saved device is unavailable", decoded_page)
+        self.assertIn("El dispositivo guardado no está disponible", decoded_page)
+        self.assertIn('t("usingFallbackDevice")', decoded_page)
         self.assertIn("Cómo usar Twin Tongue", decoded_page)
         self.assertIn('id="application-version"', decoded_page)
         self.assertIn("state.application_version", decoded_page)
@@ -260,22 +263,39 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_put_changes_voice_gender(self) -> None:
         status, _, body = await self.request(
-            "PUT", "/api/voice-gender", {"gender": "female"}
+            "PUT", "/api/pipelines/remote_to_agent/voice-gender", {"gender": "female"}
         )
 
         self.assertEqual(200, status)
-        self.assertEqual("female", json.loads(body)["voice_gender"])
-        self.assertEqual("female", self.state.get_voice_gender().value)
+        snapshot = json.loads(body)
+        self.assertEqual(
+            "female", snapshot["pipelines"]["remote_to_agent"]["voice_gender"]
+        )
+        self.assertEqual(
+            "male", snapshot["pipelines"]["agent_to_remote"]["voice_gender"]
+        )
+        self.assertEqual(
+            "female", self.state.get_voice_gender("remote_to_agent").value
+        )
         saved = json.loads(self.preference_path.read_text(encoding="utf-8"))
-        self.assertEqual("female", saved["voice_gender"])
+        self.assertEqual("female", saved["voice_genders"]["remote_to_agent"])
+        self.assertEqual("male", saved["voice_genders"]["agent_to_remote"])
 
     async def test_put_rejects_invalid_voice_gender(self) -> None:
         status, _, body = await self.request(
-            "PUT", "/api/voice-gender", {"gender": "other"}
+            "PUT", "/api/pipelines/agent_to_remote/voice-gender", {"gender": "other"}
         )
 
         self.assertEqual(400, status)
         self.assertIn("Invalid voice gender", json.loads(body)["error"])
+
+    async def test_put_rejects_voice_gender_for_unknown_pipeline(self) -> None:
+        status, _, body = await self.request(
+            "PUT", "/api/pipelines/unknown/voice-gender", {"gender": "male"}
+        )
+
+        self.assertEqual(400, status)
+        self.assertIn("Unknown pipeline", json.loads(body)["error"])
 
     async def test_delete_clears_conversation_transcription(self) -> None:
         self.state.publish_transcript_final(
@@ -297,7 +317,7 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("manual", selected["mode"])
         self.assertEqual("mic-1", selected["selection"])
         saved = json.loads(self.preference_path.read_text(encoding="utf-8"))
-        self.assertEqual("mic-1", saved["input"]["stable_id"])
+        self.assertEqual("mic-1", saved["audio_devices"]["input"]["stable_id"])
 
     async def test_put_rejects_unknown_physical_audio_selection(self) -> None:
         status, _, body = await self.request(

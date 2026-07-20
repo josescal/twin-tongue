@@ -174,6 +174,13 @@
               <div class="choice" hidden>
                 <button data-mode="translate" data-i18n="translated">Translated</button><button data-mode="passthrough" data-i18n="untranslated">Untranslated</button>
               </div>
+              <fieldset class="voice-selector" data-voice-pipeline="remote_to_agent">
+                <legend data-i18n="remoteVoiceLegend">Translated voice you hear</legend>
+                <div class="voice-options">
+                  <label class="voice-option"><input type="radio" name="voice-gender-remote_to_agent" value="male"> <span data-i18n="male">Male</span></label>
+                  <label class="voice-option"><input type="radio" name="voice-gender-remote_to_agent" value="female"> <span data-i18n="female">Female</span></label>
+                </div>
+              </fieldset>
             </article>
             <article class="card" data-pipeline="agent_to_remote">
               <h2 data-i18n="agentPipelineTitle">Audio the other person hears</h2>
@@ -181,6 +188,13 @@
               <div class="choice" hidden>
                 <button data-mode="translate" data-i18n="translated">Translated</button><button data-mode="passthrough" data-i18n="untranslated">Untranslated</button>
               </div>
+              <fieldset class="voice-selector" data-voice-pipeline="agent_to_remote">
+                <legend data-i18n="agentVoiceLegend">Translated voice the other person hears</legend>
+                <div class="voice-options">
+                  <label class="voice-option"><input type="radio" name="voice-gender-agent_to_remote" value="male"> <span data-i18n="male">Male</span></label>
+                  <label class="voice-option"><input type="radio" name="voice-gender-agent_to_remote" value="female"> <span data-i18n="female">Female</span></label>
+                </div>
+              </fieldset>
             </article>
           </section>
           <section class="virtual-routing" aria-label="VB-CABLE connections">
@@ -199,13 +213,6 @@
         </div>
         <aside class="settings-panel" aria-label="Configuration options">
           <h2 data-i18n="settingsTitle">Configuration</h2>
-          <fieldset class="voice-selector">
-            <legend data-i18n="voiceLegend">Translated voice</legend>
-            <div class="voice-options">
-              <label class="voice-option"><input type="radio" name="voice-gender" value="male"> <span data-i18n="male">Male</span></label>
-              <label class="voice-option"><input type="radio" name="voice-gender" value="female"> <span data-i18n="female">Female</span></label>
-            </div>
-          </fieldset>
           <section id="audio-recording" class="audio-recording" aria-live="polite" hidden>
             <div class="recording-state">
               <span class="recording-dot" aria-hidden="true"></span>
@@ -288,7 +295,7 @@
       en: {
         eyebrow: "Control panel", connecting: "Connecting...", connected: "Connected", reconnecting: "Disconnected",
         tabControl: "Control", tabTranscription: "Transcription", tabHelp: "Help",
-        remoteLanguage: "Other person's language", agentLanguage: "Your language", settingsTitle: "Configuration", voiceLegend: "Translated voice", male: "Male", female: "Female",
+        remoteLanguage: "Other person's language", agentLanguage: "Your language", settingsTitle: "Configuration", remoteVoiceLegend: "Translated voice you hear", agentVoiceLegend: "Translated voice the other person hears", male: "Male", female: "Female",
         speakerLabel: "Your speakers or headphones are:", micLabel: "Your microphone is:",
         remotePipelineTitle: "Audio you hear", agentPipelineTitle: "Audio the other person hears", loadingOriginal: "Loading system... Original audio is active.",
         translated: "Translated", untranslated: "Untranslated", bothDirectionsTitle: "Two-way translation", bothDirectionsHelp: "Apply the same mode to both sides of the conversation.", enableBothDirections: "Translate both ways", disableBothDirections: "Use original audio both ways",
@@ -303,6 +310,7 @@
         reviewTitle: "Review transcription", reviewText: "The Transcription tab shows what Twin Tongue understood and translated for both people. Use it to detect unclear words, repeat a phrase, or explain an idea differently.",
         noticeTitle: "Keep in mind", noticeText: "Transcription and translation can contain errors, especially with noise, names, strong accents, or very fast speech. Translation also takes a few seconds because the system must listen, interpret, translate, and play the phrase.",
         labels: { translate: "translated audio", passthrough: "untranslated audio" },
+        savedDeviceUnavailable: "The saved device is unavailable:", usingFallbackDevice: "Using instead:",
         statusLabels: { starting: "Preparing audio...", system_loading: "Loading system - original audio active", switching: "Applying change...", initializing: "Preparing translation...", translation_unavailable: "Translation unavailable - original audio active", translation_ready: "Ready: you can start speaking", passthrough: "untranslated audio", error: "Audio setup error" },
         languages: { en: "English", es: "Spanish", fr: "French", ca: "Catalan" },
         noDevice: "No audio device available", noAudioDevice: "No audio device is available", automaticDevice: "Automatic (Windows communications device)", defaultDevice: "default", savedDeviceSelection: "saved selection", cableUnavailable: "Cable unavailable", callApplicationDisconnected: "No call application connected", checkVbCable: "Check the VB-CABLE installation.", selectCableA: "Select CABLE A as the speaker in the call application.", selectCableB: "Select CABLE B as the microphone in the call application.", noConnectedApp: "No connected application", appConnected: "Application connected to this cable", processDisconnectedDetail: "The Twin Tongue process is disconnected. Audio, translation, and recording are stopped.", recordingDisconnected: "Recording stopped: process disconnected.",
@@ -311,7 +319,7 @@
       es: {
         eyebrow: "Panel de control", connecting: "Conectando...", connected: "Conectado", reconnecting: "Sin conexión",
         tabControl: "Control", tabTranscription: "Transcripción", tabHelp: "Ayuda",
-        remoteLanguage: "Idioma de la otra persona", agentLanguage: "Tu idioma", settingsTitle: "Configuración", voiceLegend: "Voz de la traducción", male: "Hombre", female: "Mujer",
+        remoteLanguage: "Idioma de la otra persona", agentLanguage: "Tu idioma", settingsTitle: "Configuración", remoteVoiceLegend: "Voz traducida que escuchas", agentVoiceLegend: "Voz traducida que escucha la otra persona", male: "Hombre", female: "Mujer",
         speakerLabel: "Tus altavoces o auriculares son:", micLabel: "Tu micrófono es:",
         remotePipelineTitle: "Audio que escuchas tú", agentPipelineTitle: "Audio que escucha la otra persona", loadingOriginal: "Cargando el sistema... El audio original está activo.",
         translated: "Traducido", untranslated: "Sin traducir", bothDirectionsTitle: "Traducción en ambos sentidos", bothDirectionsHelp: "Aplica el mismo modo a los dos sentidos de la conversación.", enableBothDirections: "Traducir en ambos sentidos", disableBothDirections: "Usar audio original en ambos sentidos",
@@ -326,6 +334,7 @@
         reviewTitle: "Revisar la transcripción", reviewText: "La pestaña Transcripción muestra lo que Twin Tongue ha entendido y traducido para ambos interlocutores. Úsala para detectar palabras confusas, repetir una frase o explicar una idea de otra manera.",
         noticeTitle: "Ten en cuenta", noticeText: "La transcripción y la traducción pueden contener errores, especialmente con ruido, nombres propios, acentos marcados o habla muy rápida. La traducción también necesita unos segundos porque el sistema debe escuchar, interpretar, traducir y reproducir la frase.",
         labels: { translate: "el audio traducido", passthrough: "el audio sin traducir" },
+        savedDeviceUnavailable: "El dispositivo guardado no está disponible:", usingFallbackDevice: "Se está usando:",
         statusLabels: { starting: "Preparando el audio...", system_loading: "Cargando el sistema - audio original activo", switching: "Aplicando el cambio...", initializing: "Preparando la traducción...", translation_unavailable: "Traducción no disponible - audio original activo", translation_ready: "Listo: puedes empezar a hablar", passthrough: "el audio sin traducir", error: "Error al preparar el audio" },
         languages: { en: "Inglés", es: "Español", fr: "Francés", ca: "Catalán" },
         noDevice: "Ningún dispositivo disponible", noAudioDevice: "No hay ningún dispositivo de audio disponible", automaticDevice: "Automático (dispositivo de comunicaciones de Windows)", defaultDevice: "predeterminado", savedDeviceSelection: "selección guardada", cableUnavailable: "Cable no disponible", callApplicationDisconnected: "Ninguna aplicación de llamada conectada", checkVbCable: "Comprueba la instalación de VB-CABLE.", selectCableA: "Selecciona CABLE A como altavoz en la aplicación de llamada.", selectCableB: "Selecciona CABLE B como micrófono en la aplicación de llamada.", noConnectedApp: "Ninguna aplicación conectada", appConnected: "Aplicación conectada a este cable", processDisconnectedDetail: "El proceso de Twin Tongue está desconectado. El audio, la traducción y la grabación están detenidos.", recordingDisconnected: "Grabación detenida: proceso desconectado.",
@@ -394,9 +403,12 @@
       applyTranslations();
       document.querySelector("#application-version").textContent = state.application_version || "-";
       renderTranscription(state);
-      for (const radio of document.querySelectorAll('input[name="voice-gender"]')) {
-        radio.checked = radio.value === state.voice_gender;
-        radio.disabled = false;
+      for (const selector of document.querySelectorAll("[data-voice-pipeline]")) {
+        const pipeline = selector.dataset.voicePipeline;
+        for (const radio of selector.querySelectorAll('input[type="radio"]')) {
+          radio.checked = radio.value === state.pipelines[pipeline].voice_gender;
+          radio.disabled = false;
+        }
       }
       for (const select of document.querySelectorAll("select[data-role]")) {
         const selectedValue = state.languages[select.dataset.role];
@@ -423,7 +435,14 @@
           const status = select.closest(".device-field").querySelector(".device-status");
           status.textContent = "";
           status.classList.remove("warning", "info");
-          if (!device.active_name) {
+          if (device.mode === "manual" && !device.preferred_available) {
+            const preferred = device.preferred_name || device.selection;
+            const fallback = device.active_name
+              ? `${t("usingFallbackDevice")} ${device.active_name}.`
+              : t("noAudioDevice");
+            status.textContent = `${t("savedDeviceUnavailable")} ${preferred}. ${fallback}`;
+            status.classList.add("warning");
+          } else if (!device.active_name) {
             status.textContent = t("noAudioDevice");
             status.classList.add("warning");
           }
@@ -690,12 +709,12 @@
       }
     }
 
-    async function setVoiceGender(gender) {
+    async function setVoiceGender(pipeline, gender) {
       errorBox.textContent = "";
-      const radios = document.querySelectorAll('input[name="voice-gender"]');
+      const radios = document.querySelectorAll(`[data-voice-pipeline="${pipeline}"] input`);
       radios.forEach(radio => radio.disabled = true);
       try {
-        const response = await fetch("/api/voice-gender", {
+        const response = await fetch(`/api/pipelines/${pipeline}/voice-gender`, {
           method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ gender })
         });
         const state = await response.json();
@@ -796,9 +815,11 @@
     document.querySelectorAll("[data-ui-language]").forEach(button => {
       button.addEventListener("click", () => setUiLanguage(button.dataset.uiLanguage));
     });
-    document.querySelectorAll('input[name="voice-gender"]').forEach(radio => {
-      radio.addEventListener("change", () => {
-        if (radio.checked) setVoiceGender(radio.value);
+    document.querySelectorAll("[data-voice-pipeline]").forEach(selector => {
+      selector.querySelectorAll('input[type="radio"]').forEach(radio => {
+        radio.addEventListener("change", () => {
+          if (radio.checked) setVoiceGender(selector.dataset.voicePipeline, radio.value);
+        });
       });
     });
     document.querySelectorAll('[role="tab"]').forEach(tab => {

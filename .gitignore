@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .env
 config/audio-device-preferences.json
+config/preferences.json
 logs/*
 !logs/.gitkeep
 .pytest_cache/

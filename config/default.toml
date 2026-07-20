@@ -18,10 +18,9 @@ opset_version = 16
 [pipelines.remote_to_agent]
 enabled = true
 mode = "passthrough"
-input_device = "Windows WASAPI::CABLE-A Output (VB-Audio Virtual Cable A)"
+voice_gender = "male"
 input_sample_rate = 48000
 input_channels = 2
-output_device = "Windows WASAPI::Realtek HD Audio 2nd output (Realtek(R) Audio)"
 output_channels = 1
 output_sample_rate = 48000
 stt_max_audio_catchup_ms = 100
@@ -49,10 +48,9 @@ maximum_segment_duration_ms = 5000
 [pipelines.agent_to_remote]
 enabled = true
 mode = "passthrough"
-input_device = "Windows WASAPI::Micrófono (Realtek(R) Audio)"
+voice_gender = "male"
 input_sample_rate = 48000
 input_channels = 1
-output_device = "Windows WASAPI::CABLE-B Input (VB-Audio Virtual Cable B)"
 output_channels = 2
 output_sample_rate = 48000
 stt_max_audio_catchup_ms = 100
@@ -120,7 +118,6 @@ format = "text"
 [tts]
 model = "eleven_flash_v2_5"
 voice_id = "851ejYcv2BoNPjrkw93G"
-voice_gender = "male"
 output_format = "pcm_16000"
 sample_rate = 16000
 speed = 1.1

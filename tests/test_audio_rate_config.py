@@ -32,7 +32,13 @@ class AudioRateConfigurationTests(unittest.TestCase):
         )
         self.assertEqual(config["tts"]["sample_rate"], 16_000)
         self.assertEqual(config["tts"]["output_format"], "pcm_16000")
-        self.assertEqual(config["tts"]["voice_gender"], "male")
+        self.assertNotIn("voice_gender", config["tts"])
+        self.assertEqual(
+            "male", config["pipelines"]["remote_to_agent"]["voice_gender"]
+        )
+        self.assertEqual(
+            "male", config["pipelines"]["agent_to_remote"]["voice_gender"]
+        )
         for language in ("ca", "en", "es", "fr"):
             voices = config["tts"]["language_voices"][language]
             self.assertEqual({"male", "female"}, set(voices))

@@ -79,9 +79,8 @@ Current development priorities include:
 - acoustic echo cancellation that preserves safe barge-in and full-duplex conversation;
 - noise reduction before VAD and STT;
 - broader reliability validation with real meeting and contact-center software;
+- evolution into a distributable Windows service with an installable package and a supported desktop control surface;
 - packaging and usability improvements for internal pilots.
-
-The [technical roadmap](docs/roadmap.md) describes how these improvements build on the validated prototype toward a consistently reliable production experience.
 
 ## Requirements
 
@@ -126,9 +125,9 @@ Twin Tongue reads these values from `.env`:
 
 Never commit or share `.env`. API keys are not written to application logs.
 
-Runtime defaults live in `config/default.toml`. This file defines audio formats, providers, pipeline devices, voice detection, segmentation, latency protection, TTS voices, diagnostic recording, logging, metrics, and the local server.
+Runtime defaults live in `config/default.toml`. This file defines audio formats, providers, pipeline behavior, voice detection, segmentation, latency protection, TTS voices, diagnostic recording, logging, metrics, and the local server.
 
-The application stores the selected physical input and output devices, interface language, participant languages, and voice gender in `config/audio-device-preferences.json`. Device preferences use stable endpoint IDs and fall back to the Windows communications defaults while a saved device is unavailable.
+The application stores the selected physical input and output devices, interface language, participant languages, and the independent voice gender for each translation direction in `config/preferences.json`. Device preferences use stable endpoint IDs and fall back to the Windows communications defaults while a saved device is unavailable.
 
 ## Running the application
 

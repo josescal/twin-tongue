@@ -3,7 +3,6 @@
 import asyncio
 
 from audio.device_manager import AudioDeviceManager
-from audio.portaudio import DeviceReference
 from audio.voice_detection import VoiceDetectorLoader
 from app_state import ApplicationState
 from metrics import CsvMetricsWriter
@@ -19,8 +18,6 @@ class AgentToRemotePipeline(RemoteToAgentPipeline):
         config: dict[str, object],
         provider_factory: ProviderFactory,
         voice_detector_loader: VoiceDetectorLoader,
-        input_device: DeviceReference,
-        output_device: DeviceReference,
         duration: float | None = None,
         startup_barrier: asyncio.Barrier | None = None,
         control_state: ApplicationState | None = None,
@@ -31,8 +28,6 @@ class AgentToRemotePipeline(RemoteToAgentPipeline):
             config=config,
             provider_factory=provider_factory,
             voice_detector_loader=voice_detector_loader,
-            input_device=input_device,
-            output_device=output_device,
             duration=duration,
             pipeline_name="agent_to_remote",
             source_language_name="agent",

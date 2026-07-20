@@ -18,7 +18,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BASE_URL = "https://api.elevenlabs.io"
 
 
-def parse_args(tts_config: dict[str, object], languages: dict[str, object]) -> argparse.Namespace:
+def parse_args(
+    tts_config: dict[str, object],
+    languages: dict[str, object],
+    default_voice_gender: str,
+) -> argparse.Namespace:
     """Parse isolated TTS diagnostic arguments."""
     parser = argparse.ArgumentParser(description="Synthesize one WAV file with ElevenLabs TTS.")
     parser.add_argument(
@@ -30,7 +34,7 @@ def parse_args(tts_config: dict[str, object], languages: dict[str, object]) -> a
     parser.add_argument(
         "--voice-gender",
         choices=("male", "female"),
-        default=tts_config["voice_gender"],
+        default=default_voice_gender,
     )
     parser.add_argument(
         "--voice-id",
@@ -134,10 +138,16 @@ def main() -> int:
     try:
         config = load_config(PROJECT_ROOT / "config" / "default.toml")
         tts_config = config["tts"]
-        languages = config["languages"]
+        pipelines = config["pipelines"]
         assert isinstance(tts_config, dict)
-        assert isinstance(languages, dict)
-        args = parse_args(tts_config, languages)
+        assert isinstance(pipelines, dict)
+        remote_pipeline = pipelines["remote_to_agent"]
+        assert isinstance(remote_pipeline, dict)
+        args = parse_args(
+            tts_config,
+            {"agent": "es"},
+            str(remote_pipeline["voice_gender"]),
+        )
         api_key, base_url = load_environment()
         asyncio.run(run_tts(args, tts_config, api_key, base_url))
     except KeyboardInterrupt:
