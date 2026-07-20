@@ -58,7 +58,7 @@ class StreamingVoiceDetectorTests(unittest.TestCase):
         )
         self.assertIn("event=voice_detection_package_loaded backend=silero", messages)
 
-    def test_preroll_is_forwarded_when_backend_starts_speech(self) -> None:
+    def test_speech_pad_is_forwarded_when_backend_starts_speech(self) -> None:
         backend = SequenceBackend([
             VoiceActivityEvent(False),
             VoiceActivityEvent(True, started=True),
@@ -68,7 +68,7 @@ class StreamingVoiceDetectorTests(unittest.TestCase):
         detector = StreamingVoiceDetector(
             backend,
             frame_duration_ms=20,
-            preroll_ms=40,
+            speech_pad_ms=40,
         )
         silence, speech = _block(0), _block(1)
         self.assertEqual(detector.process(silence).forwarded_blocks, ())
@@ -89,21 +89,66 @@ class StreamingVoiceDetectorTests(unittest.TestCase):
         detector = StreamingVoiceDetector(
             backend,
             frame_duration_ms=20,
-            preroll_ms=0,
+            speech_pad_ms=0,
         )
         detector.process(_block(1))
         self.assertFalse(detector.process(_block(1)).speech_ended)
         self.assertFalse(detector.process(_block(1)).speech_ended)
         self.assertEqual(backend.resets, 0)
 
+    def test_short_activation_is_discarded_before_reaching_stt(self) -> None:
+        backend = SequenceBackend([
+            VoiceActivityEvent(True, started=True),
+            VoiceActivityEvent(True),
+            VoiceActivityEvent(True, silence_duration_ms=20),
+            VoiceActivityEvent(False, ended=True, silence_duration_ms=40),
+        ])
+        detector = StreamingVoiceDetector(
+            backend,
+            frame_duration_ms=20,
+            speech_pad_ms=40,
+            min_speech_duration_ms=60,
+        )
+
+        results = [detector.process(_block(1)) for _ in range(4)]
+
+        self.assertTrue(all(not result.forwarded_blocks for result in results))
+        self.assertTrue(all(not result.speech_started for result in results))
+        self.assertEqual(detector.statistics.activations, 0)
+
+    def test_confirmed_activation_releases_buffered_audio_once(self) -> None:
+        backend = SequenceBackend([
+            VoiceActivityEvent(False),
+            VoiceActivityEvent(True, started=True),
+            VoiceActivityEvent(True),
+            VoiceActivityEvent(True),
+        ])
+        detector = StreamingVoiceDetector(
+            backend,
+            frame_duration_ms=20,
+            speech_pad_ms=40,
+            min_speech_duration_ms=60,
+        )
+        silence, speech = _block(0), _block(1)
+
+        self.assertFalse(detector.process(silence).forwarded_blocks)
+        self.assertFalse(detector.process(speech).forwarded_blocks)
+        self.assertFalse(detector.process(speech).forwarded_blocks)
+        confirmed = detector.process(speech)
+
+        self.assertEqual(confirmed.forwarded_blocks, (silence, speech, speech, speech))
+        self.assertTrue(confirmed.speech_started)
+        self.assertTrue(confirmed.active)
+        self.assertEqual(detector.statistics.activations, 1)
+
     def test_each_direction_has_independent_state_and_reset(self) -> None:
         left_backend = SequenceBackend([VoiceActivityEvent(True, started=True)])
         right_backend = SequenceBackend([VoiceActivityEvent(False)])
         left = StreamingVoiceDetector(
-            left_backend, frame_duration_ms=20, preroll_ms=0,
+            left_backend, frame_duration_ms=20, speech_pad_ms=0,
         )
         right = StreamingVoiceDetector(
-            right_backend, frame_duration_ms=20, preroll_ms=0,
+            right_backend, frame_duration_ms=20, speech_pad_ms=0,
         )
         left.process(_block(1))
         right.process(_block(0))
@@ -116,8 +161,10 @@ class StreamingVoiceDetectorTests(unittest.TestCase):
     def test_configuration_accepts_only_registered_external_backend(self) -> None:
         pipeline = {
             "threshold": 0.5,
+            "negative_threshold": 0.35,
+            "min_speech_duration_ms": 100,
             "min_silence_duration_ms": 350,
-            "preroll_ms": 200,
+            "speech_pad_ms": 200,
         }
         validate_voice_detection_settings(
             {"backend": "silero", "silero": {"runtime": "onnx", "opset_version": 16}},
@@ -125,6 +172,23 @@ class StreamingVoiceDetectorTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "backend"):
             validate_voice_detection_settings({"backend": "energy"}, pipeline)
+
+    def test_configuration_rejects_invalid_negative_threshold(self) -> None:
+        pipeline = {
+            "threshold": 0.5,
+            "negative_threshold": 0.5,
+            "min_speech_duration_ms": 100,
+            "min_silence_duration_ms": 350,
+            "speech_pad_ms": 200,
+        }
+        with self.assertRaisesRegex(ValueError, "negative_threshold"):
+            validate_voice_detection_settings(
+                {
+                    "backend": "silero",
+                    "silero": {"runtime": "onnx", "opset_version": 16},
+                },
+                pipeline,
+            )
 
 
 class VoiceDetectorLoaderTests(unittest.IsolatedAsyncioTestCase):

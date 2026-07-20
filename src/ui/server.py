@@ -155,6 +155,21 @@ class LocalControlServer:
                     payload["language"],
                 )
                 await self._write_json(writer, 200, snapshot)
+            elif method == "PUT" and path == "/api/ui-language":
+                payload = self._decode_json(body)
+                if not isinstance(payload.get("language"), str):
+                    raise HttpRequestError(
+                        400, "The JSON body must contain a string 'language'."
+                    )
+                try:
+                    snapshot = await self._state.set_ui_language(payload["language"])
+                except ValueError as error:
+                    raise HttpRequestError(400, str(error)) from error
+                LOGGER.info(
+                    "event=control_changed setting=ui_language value=%s",
+                    payload["language"],
+                )
+                await self._write_json(writer, 200, snapshot)
             elif method == "PUT" and path == "/api/voice-gender":
                 payload = self._decode_json(body)
                 if not isinstance(payload.get("gender"), str):
@@ -170,8 +185,44 @@ class LocalControlServer:
                     payload["gender"],
                 )
                 await self._write_json(writer, 200, snapshot)
+            elif method == "PUT" and path.startswith("/api/audio-devices/"):
+                direction = path.removeprefix("/api/audio-devices/")
+                payload = self._decode_json(body)
+                if not isinstance(payload.get("selection"), str):
+                    raise HttpRequestError(
+                        400, "The JSON body must contain a string 'selection'."
+                    )
+                try:
+                    snapshot = await self._state.set_audio_device(
+                        direction, payload["selection"]
+                    )
+                except ValueError as error:
+                    raise HttpRequestError(400, str(error)) from error
+                LOGGER.info(
+                    "event=control_changed setting=audio_device direction=%s value=%s",
+                    direction,
+                    payload["selection"],
+                )
+                await self._write_json(writer, 200, snapshot)
+            elif method == "PUT" and path == "/api/audio-recording":
+                payload = self._decode_json(body)
+                if not isinstance(payload.get("active"), bool):
+                    raise HttpRequestError(
+                        400, "The JSON body must contain a boolean 'active'."
+                    )
+                try:
+                    snapshot = await self._state.set_manual_audio_recording(
+                        payload["active"]
+                    )
+                except ValueError as error:
+                    raise HttpRequestError(400, str(error)) from error
+                LOGGER.info(
+                    "event=control_changed setting=audio_recording manual=%s",
+                    payload["active"],
+                )
+                await self._write_json(writer, 200, snapshot)
             elif method == "DELETE" and path == "/api/transcription":
-                snapshot = await self._state.clear_agent_transcription()
+                snapshot = await self._state.clear_transcription()
                 LOGGER.info("event=control_changed setting=transcription action=cleared")
                 await self._write_json(writer, 200, snapshot)
             else:

@@ -5,8 +5,70 @@ from twin_tongue_version import __version__
 
 
 class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
+    def test_disabled_barge_in_suppresses_only_the_opposite_capture_with_tail(self) -> None:
+        state = ApplicationState(
+            barge_in_enabled=False,
+            barge_in_resume_delay_ms=300,
+        )
+
+        state.note_translated_playback(
+            "remote_to_agent", buffered_audio_ms=100, now=10.0
+        )
+
+        self.assertTrue(
+            state.is_capture_suppressed_by_barge_in("agent_to_remote", now=10.39)
+        )
+        self.assertFalse(
+            state.is_capture_suppressed_by_barge_in("agent_to_remote", now=10.40)
+        )
+        self.assertFalse(
+            state.is_capture_suppressed_by_barge_in("remote_to_agent", now=10.1)
+        )
+
+    def test_enabled_barge_in_never_suppresses_opposite_capture(self) -> None:
+        state = ApplicationState(barge_in_enabled=True)
+        state.note_translated_playback(
+            "remote_to_agent", buffered_audio_ms=1_000, now=10.0
+        )
+
+        self.assertFalse(
+            state.is_capture_suppressed_by_barge_in("agent_to_remote", now=10.1)
+        )
+
     async def test_snapshot_exposes_application_version(self) -> None:
         self.assertEqual(__version__, ApplicationState().snapshot()["application_version"])
+
+    async def test_translation_automatically_activates_enabled_recording(self) -> None:
+        state = ApplicationState(audio_recording_enabled=True)
+
+        idle = state.snapshot()["audio_recording"]
+        translated = await state.set_mode("agent_to_remote", "translate")
+
+        self.assertFalse(idle["active"])
+        self.assertTrue(translated["audio_recording"]["active"])
+        self.assertEqual(
+            ["agent_to_remote"],
+            translated["audio_recording"]["automatic_pipelines"],
+        )
+        self.assertTrue(state.is_audio_recording_active_for("agent_to_remote"))
+        self.assertFalse(state.is_audio_recording_active_for("remote_to_agent"))
+
+    async def test_manual_recording_covers_passthrough_without_persisting_mode(self) -> None:
+        state = ApplicationState(audio_recording_enabled=True)
+
+        started = await state.set_manual_audio_recording(True)
+        stopped = await state.set_manual_audio_recording(False)
+
+        self.assertTrue(started["audio_recording"]["active"])
+        self.assertTrue(started["audio_recording"]["manual"])
+        self.assertFalse(stopped["audio_recording"]["active"])
+        self.assertFalse(stopped["audio_recording"]["manual"])
+
+    async def test_manual_recording_rejects_disabled_feature(self) -> None:
+        state = ApplicationState(audio_recording_enabled=False)
+
+        with self.assertRaisesRegex(ValueError, "disabled in configuration"):
+            await state.set_manual_audio_recording(True)
 
     async def test_mode_change_updates_revision_and_notifies_subscriber(self) -> None:
         state = ApplicationState(active_pipelines=("remote_to_agent",))
@@ -79,6 +141,24 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "Unknown language role"):
             await state.set_language("operator", "es")
 
+    async def test_ui_language_change_is_published(self) -> None:
+        state = ApplicationState(initial_ui_language="en")
+
+        async with state.subscribe() as updates:
+            snapshot = await state.set_ui_language("es")
+            published = await updates.get()
+
+        self.assertEqual("es", state.get_ui_language())
+        self.assertEqual("es", snapshot["ui_language"])
+        self.assertEqual(["en", "es"], snapshot["supported_ui_languages"])
+        self.assertEqual(snapshot, published)
+
+    async def test_invalid_ui_language_is_rejected(self) -> None:
+        state = ApplicationState()
+
+        with self.assertRaisesRegex(ValueError, "Unsupported UI language"):
+            await state.set_ui_language("fr")
+
     async def test_voice_gender_change_is_published(self) -> None:
         state = ApplicationState(initial_voice_gender="male")
 
@@ -96,13 +176,16 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "Invalid voice gender"):
             await state.set_voice_gender("neutral")
 
-    async def test_agent_final_and_translation_are_published_together(self) -> None:
+    async def test_final_and_translation_are_published_with_their_direction(self) -> None:
         state = ApplicationState()
 
-        state.publish_agent_final(1, "Buenos días", "es", "en")
-        state.publish_agent_translation(1, "Good morning")
+        state.publish_transcript_final(
+            "agent_to_remote", 1, "Buenos días", "es", "en"
+        )
+        state.publish_transcript_translation("agent_to_remote", 1, "Good morning")
 
         entry = state.snapshot()["transcription"]["entries"][0]
+        self.assertEqual("agent_to_remote", entry["pipeline"])
         self.assertEqual("Buenos días", entry["source_text"])
         self.assertEqual("Good morning", entry["translated_text"])
         self.assertEqual("complete", entry["translation_status"])
@@ -111,24 +194,35 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_untranslated_final_can_be_marked_unavailable(self) -> None:
         state = ApplicationState()
-        state.publish_agent_final(1, "Hola", "es", "en")
+        state.publish_transcript_final("remote_to_agent", 1, "Hello", "en", "es")
 
-        state.mark_agent_translation_unavailable(1)
+        state.mark_transcript_translation_unavailable("remote_to_agent", 1)
 
         entry = state.snapshot()["transcription"]["entries"][0]
         self.assertEqual("unavailable", entry["translation_status"])
         self.assertIsNone(entry["translated_text"])
 
-    async def test_agent_transcription_is_bounded_and_can_be_cleared(self) -> None:
+    async def test_transcription_is_bounded_and_can_be_cleared(self) -> None:
         state = ApplicationState()
         for transcript_id in range(60):
-            state.publish_agent_final(
-                transcript_id, f"Frase {transcript_id}", "es", "en"
+            state.publish_transcript_final(
+                "agent_to_remote", transcript_id, f"Frase {transcript_id}", "es", "en"
             )
 
         entries = state.snapshot()["transcription"]["entries"]
         self.assertEqual(50, len(entries))
         self.assertEqual(10, entries[0]["id"])
 
-        snapshot = await state.clear_agent_transcription()
+        snapshot = await state.clear_transcription()
         self.assertEqual([], snapshot["transcription"]["entries"])
+
+    async def test_same_transcript_id_is_isolated_between_directions(self) -> None:
+        state = ApplicationState()
+        state.publish_transcript_final("remote_to_agent", 1, "Hello", "en", "es")
+        state.publish_transcript_final("agent_to_remote", 1, "Hola", "es", "en")
+
+        state.publish_transcript_translation("remote_to_agent", 1, "Hola")
+
+        entries = state.snapshot()["transcription"]["entries"]
+        self.assertEqual("Hola", entries[0]["translated_text"])
+        self.assertIsNone(entries[1]["translated_text"])

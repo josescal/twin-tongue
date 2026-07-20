@@ -2,7 +2,7 @@
 processing_sample_rate = 16000
 sample_format = "int16"
 frame_duration_ms = 20
-device_poll_interval_seconds = 1.5
+device_poll_interval_seconds = 5.0
 
 [audio.resampling]
 backend = "soxr"
@@ -14,10 +14,6 @@ backend = "silero"
 [voice_detection.silero]
 runtime = "onnx"
 opset_version = 16
-
-[languages]
-agent = "es"
-remote = "en"
 
 [pipelines.remote_to_agent]
 enabled = true
@@ -38,8 +34,10 @@ playback_backlog_segments_to_keep = 2
 
 [pipelines.remote_to_agent.voice_detection]
 threshold = 0.50
+negative_threshold = 0.35
+min_speech_duration_ms = 100
 min_silence_duration_ms = 350
-preroll_ms = 200
+speech_pad_ms = 100
 
 [pipelines.remote_to_agent.segmentation]
 minimum_segment_duration_ms = 1500
@@ -59,6 +57,12 @@ output_channels = 2
 output_sample_rate = 48000
 stt_max_audio_catchup_ms = 100
 
+[pipelines.agent_to_remote.barge_in]
+# When disabled, the agent microphone is suppressed while remote-to-agent TTS
+# plays locally, preventing that TTS from being translated back to the caller.
+enabled = false
+resume_delay_ms = 300
+
 [pipelines.agent_to_remote.latency_protection]
 enabled = true
 playback_backlog_discard_age_seconds = 8.0
@@ -66,15 +70,17 @@ segment_discard_age_seconds = 15.0
 playback_backlog_segments_to_keep = 2
 
 [pipelines.agent_to_remote.voice_detection]
-threshold = 0.35
-min_silence_duration_ms = 500
-preroll_ms = 300
+threshold = 0.70
+negative_threshold = 0.50
+min_speech_duration_ms = 200
+min_silence_duration_ms = 250
+speech_pad_ms = 100
 
 [pipelines.agent_to_remote.segmentation]
-minimum_segment_duration_ms = 1500
+minimum_segment_duration_ms = 2200
 preferred_segment_duration_ms = 2500
 short_pause_duration_ms = 150
-partial_boundary_stability_ms = 200
+partial_boundary_stability_ms = 350
 maximum_segment_duration_ms = 5000
 
 [providers]
@@ -82,13 +88,30 @@ stt = "elevenlabs"
 translation = "google_translate_basic_v2"
 tts = "elevenlabs"
 
+[providers.retry]
+max_attempts = 2
+base_delay_seconds = 0.75
+
 [stt]
 model = "scribe_v2_realtime"
 audio_format = "pcm_16000"
 sample_rate = 16000
-include_timestamps = false
+include_timestamps = true
+no_verbatim = true
+keyterms = []
+send_chunk_duration_ms = 100
 queue_capacity_blocks = 50
 idle_keepalive_seconds = 5.0
+
+[stt.audio_capture]
+enabled = true
+directory = "logs/stt-audio"
+max_seconds_per_file = 120.0
+# Enable only for detailed timing analysis; it creates an additional JSONL file.
+write_timing_marks = false
+# Batch small 20 ms blocks to reduce filesystem and antivirus overhead.
+write_buffer_kb = 64
+flush_interval_seconds = 1.0
 
 [translation]
 endpoint = "https://translation.googleapis.com/language/translate/v2"
@@ -112,11 +135,17 @@ ca = { male = "851ejYcv2BoNPjrkw93G", female = "LudcwvHIZaqQOcQfVZSY" }
 ca = "eleven_v3"
 
 [logging]
-level = "INFO"
+level = "DEBUG"
+# Set to false for an antivirus-sensitive run with console logging only.
+file_enabled = true
 log_file = "logs/twin-tongue.log"
 log_size_mb = 5
 log_max_files = 5
 log_queue_capacity = 1000
+# ERROR records still flush immediately; INFO/DEBUG records are batched.
+file_flush_interval_seconds = 5.0
+# Metrics write only twice per minute by default, but can also be disabled.
+metrics_enabled = false
 metrics_file = "logs/metrics.csv"
 metrics_retention_days = 14
 metrics_interval_seconds = 60.0

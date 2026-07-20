@@ -28,7 +28,7 @@ from audio.virtual_cables import (
 from audio.windows_audio import query_core_audio_endpoints
 
 LOGGER = logging.getLogger(__name__)
-DEFAULT_POLL_INTERVAL_SECONDS = 1.5
+DEFAULT_POLL_INTERVAL_SECONDS = 5.0
 DEFAULT_SESSION_POLL_INTERVAL_SECONDS = 7.5
 DeviceKey = SelectionDirection | CableRoute
 
@@ -42,6 +42,8 @@ class AudioDeviceManager:
         poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
         session_poll_interval_seconds: float = DEFAULT_SESSION_POLL_INTERVAL_SECONDS,
         default_voice_gender: str = "male",
+        default_ui_language: str = "en",
+        default_participant_languages: dict[str, str] | None = None,
     ) -> None:
         if poll_interval_seconds <= 0:
             raise ValueError("Audio device poll interval must be greater than zero.")
@@ -50,7 +52,10 @@ class AudioDeviceManager:
         self.poll_interval_seconds = poll_interval_seconds
         self.session_poll_interval_seconds = session_poll_interval_seconds
         self._physical = PhysicalDeviceSelection(
-            preference_path, default_voice_gender=default_voice_gender
+            preference_path,
+            default_voice_gender=default_voice_gender,
+            default_ui_language=default_ui_language,
+            default_participant_languages=default_participant_languages,
         )
         self._cables: list[VirtualCablePair] = []
         self._revisions: dict[DeviceKey, int] = {
@@ -134,8 +139,34 @@ class AudioDeviceManager:
     def voice_gender(self) -> str:
         return self._physical.voice_gender
 
+    @property
+    def ui_language(self) -> str:
+        return self._physical.ui_language
+
+    @property
+    def participant_languages(self) -> dict[str, str]:
+        return self._physical.participant_languages
+
     def set_voice_gender(self, gender: str) -> None:
         self._physical.set_voice_gender(gender)
+
+    def set_ui_language(self, language: str) -> None:
+        self._physical.set_ui_language(language)
+
+    def set_participant_language(self, role: str, language: str) -> None:
+        self._physical.set_participant_language(role, language)
+
+    async def set_physical_device(
+        self, direction: SelectionDirection, selection: str
+    ) -> bool:
+        """Persist a physical endpoint selection and wake the affected pipeline."""
+        changed = self._physical.set_device(direction, selection)
+        if not changed:
+            return False
+        self._revisions[direction] += 1
+        async with self._condition:
+            self._condition.notify_all()
+        return True
 
     def active_index(self, key: DeviceKey, fallback: int | None = None) -> int:
         if key in {"input", "output"}:

@@ -29,12 +29,33 @@ class STTServiceError(STTError):
 
 
 @dataclass(frozen=True)
+class RealtimeTranscriptWord:
+    """One timestamped realtime word with optional model confidence."""
+
+    text: str
+    start_seconds: float | None = None
+    end_seconds: float | None = None
+    logprob: float | None = None
+
+
+@dataclass(frozen=True)
 class RealtimeTranscript:
     """A committed transcript with optional segment timestamps."""
 
     text: str
     start_seconds: float | None = None
     end_seconds: float | None = None
+    words: tuple[RealtimeTranscriptWord, ...] = ()
+
+    @property
+    def average_logprob(self) -> float | None:
+        values = [word.logprob for word in self.words if word.logprob is not None]
+        return sum(values) / len(values) if values else None
+
+    @property
+    def minimum_logprob(self) -> float | None:
+        values = [word.logprob for word in self.words if word.logprob is not None]
+        return min(values) if values else None
 
 
 @dataclass

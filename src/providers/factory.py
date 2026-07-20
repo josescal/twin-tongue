@@ -12,6 +12,7 @@ from providers.elevenlabs_stt import ElevenLabsRealtimeSTT
 from providers.elevenlabs_tts import ElevenLabsTTS
 from providers.errors import ProviderConfigurationError
 from providers.google_translate import GoogleTranslateBasicV2
+from providers.retry import ProviderRetryPolicy
 from providers.stt import RealtimeTranscript, SpeechToText
 from providers.translate import Translator
 from providers.tts import TextToSpeech
@@ -75,6 +76,7 @@ class ProviderFactory:
             api_key=self._credentials.google_translate_api_key,
             endpoint=str(translation["endpoint"]),
             text_format=str(translation["format"]),
+            retry_policy=self._retry_policy(),
         )
 
     def create_tts(self) -> TextToSpeech:
@@ -103,6 +105,7 @@ class ProviderFactory:
                     tts.get("language_models", {})
                 ).items()
             },
+            retry_policy=self._retry_policy(),
         )
 
     def create_stt(
@@ -122,7 +125,11 @@ class ProviderFactory:
             sample_rate=int(stt["sample_rate"]),
             language=language,
             include_timestamps=bool(stt["include_timestamps"]),
+            no_verbatim=bool(stt["no_verbatim"]),
+            keyterms=[str(term) for term in list(stt["keyterms"])],
+            send_chunk_duration_ms=int(stt["send_chunk_duration_ms"]),
             reconnect_on_close=True,
+            retry_policy=self._retry_policy(),
             on_partial=on_partial,
             on_final=on_final,
         )
@@ -134,6 +141,19 @@ class ProviderFactory:
                 f"Provider configuration section '{name}' must be a mapping."
             )
         return section
+
+    def _retry_policy(self) -> ProviderRetryPolicy:
+        providers = self._section("providers")
+        retry = providers.get("retry", {})
+        if not isinstance(retry, dict):
+            raise ProviderConfigurationError("Provider retry configuration must be a mapping.")
+        try:
+            return ProviderRetryPolicy(
+                max_attempts=int(retry.get("max_attempts", 2)),
+                base_delay_seconds=float(retry.get("base_delay_seconds", 0.75)),
+            )
+        except ValueError as error:
+            raise ProviderConfigurationError(str(error)) from error
 
     def _validate_selection(self) -> None:
         providers = self._section("providers")

@@ -16,6 +16,7 @@ from providers.tts import (
     TTSResult,
     TTSServiceError,
 )
+from providers.retry import ProviderRetryPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class ElevenLabsTTS:
         timeout_seconds: float = 30,
         language_voices: dict[str, dict[str, str]] | None = None,
         language_models: dict[str, str] | None = None,
+        retry_policy: ProviderRetryPolicy | None = None,
     ) -> None:
         if not api_key.strip():
             raise TTSConfigurationError("ELEVENLABS_API_KEY is missing or empty.")
@@ -58,6 +60,7 @@ class ElevenLabsTTS:
         self.timeout_seconds = timeout_seconds
         self.language_voices = dict(language_voices or {})
         self.language_models = dict(language_models or {})
+        self.retry_policy = retry_policy or ProviderRetryPolicy()
         self._http_client: httpx.AsyncClient | None = None
         self._client: AsyncElevenLabs | None = None
 
@@ -125,63 +128,79 @@ class ElevenLabsTTS:
             voice_gender, self.voice_id
         )
         selected_model = self.language_models.get(language, self.model)
-        first_byte_latency: float | None = None
-        received_audio = False
-        try:
-            async for chunk in self._client.text_to_speech.stream(
-                voice_id=selected_voice_id,
-                text=source_text,
-                model_id=selected_model,
-                output_format=self.output_format,
-                language_code=language,
-                voice_settings=VoiceSettings(speed=self.speed),
-            ):
-                if not chunk:
-                    continue
-                chunk_first_byte_latency: float | None = None
-                if first_byte_latency is None:
-                    first_byte_latency = time.monotonic() - started_at
-                    chunk_first_byte_latency = first_byte_latency
-                received_audio = True
+        for attempt in range(1, self.retry_policy.max_attempts + 1):
+            first_byte_latency: float | None = None
+            received_audio = False
+            try:
+                async for chunk in self._client.text_to_speech.stream(
+                    voice_id=selected_voice_id,
+                    text=source_text,
+                    model_id=selected_model,
+                    output_format=self.output_format,
+                    language_code=language,
+                    voice_settings=VoiceSettings(speed=self.speed),
+                ):
+                    if not chunk:
+                        continue
+                    chunk_first_byte_latency: float | None = None
+                    if first_byte_latency is None:
+                        first_byte_latency = time.monotonic() - started_at
+                        chunk_first_byte_latency = first_byte_latency
+                    received_audio = True
+                    yield TTSChunk(
+                        audio=chunk,
+                        sample_rate=self.sample_rate,
+                        channels=1,
+                        sample_width_bytes=2,
+                        first_byte_latency_seconds=chunk_first_byte_latency,
+                    )
+            except httpx.HTTPStatusError as error:
+                status_code = error.response.status_code
+                if status_code in {401, 403}:
+                    raise TTSAuthenticationError(
+                        "ElevenLabs rejected the API key or voice permissions."
+                    ) from error
+                classified: Exception = (
+                    TTSNetworkError(f"ElevenLabs TTS is temporarily unavailable (HTTP {status_code}).")
+                    if status_code == 408 or status_code >= 500
+                    else TTSServiceError(f"ElevenLabs rejected TTS synthesis (HTTP {status_code}).")
+                )
+            except (httpx.TimeoutException, httpx.TransportError) as error:
+                classified = TTSNetworkError("ElevenLabs TTS could not be reached.")
+            except Exception as error:
+                status_code = getattr(error, "status_code", None)
+                if status_code in {401, 403}:
+                    raise TTSAuthenticationError(
+                        "ElevenLabs rejected the API key or voice permissions."
+                    ) from error
+                classified = TTSServiceError(
+                    f"ElevenLabs TTS synthesis failed: {error.__class__.__name__}."
+                )
+            else:
+                if not received_audio:
+                    raise TTSServiceError("ElevenLabs returned no TTS audio.")
                 yield TTSChunk(
-                    audio=chunk,
+                    audio=b"",
                     sample_rate=self.sample_rate,
                     channels=1,
                     sample_width_bytes=2,
-                    first_byte_latency_seconds=chunk_first_byte_latency,
+                    first_byte_latency_seconds=first_byte_latency,
+                    total_latency_seconds=time.monotonic() - started_at,
+                    final=True,
                 )
-        except httpx.HTTPStatusError as error:
-            status_code = error.response.status_code
-            if status_code in {401, 403}:
-                raise TTSAuthenticationError(
-                    "ElevenLabs rejected the API key or voice permissions."
-                ) from error
-            raise TTSServiceError(
-                f"ElevenLabs rejected TTS synthesis (HTTP {status_code})."
-            ) from error
-        except (httpx.TimeoutException, httpx.TransportError) as error:
-            raise TTSNetworkError("ElevenLabs TTS could not be reached.") from error
-        except Exception as error:
-            status_code = getattr(error, "status_code", None)
-            if status_code in {401, 403}:
-                raise TTSAuthenticationError(
-                    "ElevenLabs rejected the API key or voice permissions."
-                ) from error
-            raise TTSServiceError(
-                f"ElevenLabs TTS synthesis failed: {error.__class__.__name__}."
-            ) from error
-
-        if not received_audio:
-            raise TTSServiceError("ElevenLabs returned no TTS audio.")
-        yield TTSChunk(
-            audio=b"",
-            sample_rate=self.sample_rate,
-            channels=1,
-            sample_width_bytes=2,
-            first_byte_latency_seconds=first_byte_latency,
-            total_latency_seconds=time.monotonic() - started_at,
-            final=True,
-        )
+                return
+            if received_audio or not isinstance(classified, TTSNetworkError) or attempt == self.retry_policy.max_attempts:
+                raise classified
+            delay = self.retry_policy.delay_seconds(attempt)
+            logger.warning(
+                "event=provider_request_retry provider=elevenlabs_tts attempt=%s "
+                "next_attempt=%s delay_seconds=%.2f error=%s",
+                attempt,
+                attempt + 1,
+                delay,
+                classified,
+            )
+            await asyncio.sleep(delay)
 
     async def close(self) -> None:
         """Close the owned HTTP transport."""

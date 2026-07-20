@@ -68,5 +68,18 @@ class PcmBlockBuffer:
             self._available.append(block)
         return True
 
+    def clear(self) -> int:
+        """Discard queued blocks and return how many were removed.
+
+        This is deliberately allocation-free so it can be used while the
+        PortAudio callback is active.  Individual deque operations are kept
+        short; the callback never yields while reading a block.
+        """
+        cleared = 0
+        while self._ready:
+            self._available.append(self._ready.popleft())
+            cleared += 1
+        return cleared
+
     def __len__(self) -> int:
         return len(self._ready)

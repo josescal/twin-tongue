@@ -25,6 +25,7 @@ DEFAULT_LOG_PATH = PROJECT_ROOT / "logs" / "twin-tongue.log"
 DEFAULT_LOG_SIZE_MB = 5.0
 DEFAULT_LOG_MAX_FILES = 5
 DEFAULT_LOG_QUEUE_CAPACITY = 1_000
+DEFAULT_LOG_FILE_FLUSH_INTERVAL_SECONDS = 2.0
 LOGGING_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 
 
@@ -59,6 +60,44 @@ class NonBlockingQueueHandler(QueueHandler):
         except Full:
             with self._dropped_records_lock:
                 self._dropped_records += 1
+
+
+class BufferedRotatingFileHandler(RotatingFileHandler):
+    """Rotate logs normally while batching non-critical filesystem flushes."""
+
+    def __init__(
+        self,
+        *args: object,
+        flush_interval_seconds: float = DEFAULT_LOG_FILE_FLUSH_INTERVAL_SECONDS,
+        **kwargs: object,
+    ) -> None:
+        self._flush_interval_seconds = flush_interval_seconds
+        self._last_flush_monotonic = time.monotonic()
+        super().__init__(*args, **kwargs)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        super().emit(record)
+        if record.levelno >= logging.ERROR:
+            RotatingFileHandler.flush(self)
+            self._last_flush_monotonic = time.monotonic()
+
+    def flush(self) -> None:
+        now = time.monotonic()
+        if (
+            self._flush_interval_seconds == 0
+            or now - self._last_flush_monotonic >= self._flush_interval_seconds
+        ):
+            RotatingFileHandler.flush(self)
+            self._last_flush_monotonic = now
+
+    def doRollover(self) -> None:
+        RotatingFileHandler.flush(self)
+        super().doRollover()
+        self._last_flush_monotonic = time.monotonic()
+
+    def close(self) -> None:
+        RotatingFileHandler.flush(self)
+        super().close()
 
 
 class BoundedShutdownQueueListener(QueueListener):
@@ -100,6 +139,7 @@ def configure_logging(
     log_size_mb: float = DEFAULT_LOG_SIZE_MB,
     log_max_files: int = DEFAULT_LOG_MAX_FILES,
     log_queue_capacity: int = DEFAULT_LOG_QUEUE_CAPACITY,
+    file_flush_interval_seconds: float = DEFAULT_LOG_FILE_FLUSH_INTERVAL_SECONDS,
     console_stream: TextIO | None = None,
 ) -> None:
     """Queue contextual logs for a dedicated console and file writer thread."""
@@ -110,6 +150,8 @@ def configure_logging(
         raise ValueError("Logging log_max_files must be at least two.")
     if log_queue_capacity < 1:
         raise ValueError("Logging log_queue_capacity must be at least one.")
+    if file_flush_interval_seconds < 0:
+        raise ValueError("Logging file flush interval cannot be negative.")
 
     with _LOGGING_RUNTIME_LOCK:
         shutdown_logging()
@@ -131,11 +173,12 @@ def configure_logging(
             resolved_path = Path(log_path)
             try:
                 resolved_path.parent.mkdir(parents=True, exist_ok=True)
-                file_handler = RotatingFileHandler(
+                file_handler = BufferedRotatingFileHandler(
                     resolved_path,
                     maxBytes=int(log_size_mb * 1024 * 1024),
                     backupCount=log_max_files - 1,
                     encoding="utf-8",
+                    flush_interval_seconds=file_flush_interval_seconds,
                 )
             except OSError as error:
                 file_error = error
@@ -225,7 +268,6 @@ def set_log_pipeline(name: str) -> Token[str]:
 REQUIRED_SECTIONS = (
     "audio",
     "voice_detection",
-    "languages",
     "pipelines",
     "providers",
     "stt",
@@ -241,7 +283,7 @@ REQUIRED_AUDIO_KEYS = (
     "device_poll_interval_seconds",
     "resampling",
 )
-REQUIRED_LANGUAGE_KEYS = ("agent", "remote")
+REQUIRED_BARGE_IN_KEYS = ("enabled", "resume_delay_ms")
 SUPPORTED_LANGUAGE_CODES = {"en", "es", "fr", "ca"}
 REQUIRED_PIPELINE_KEYS = (
     "enabled",
@@ -276,7 +318,17 @@ REQUIRED_STT_KEYS = (
     "audio_format",
     "sample_rate",
     "include_timestamps",
+    "no_verbatim",
+    "keyterms",
+    "send_chunk_duration_ms",
     "queue_capacity_blocks",
+    "idle_keepalive_seconds",
+    "audio_capture",
+)
+REQUIRED_STT_AUDIO_CAPTURE_KEYS = (
+    "enabled",
+    "directory",
+    "max_seconds_per_file",
 )
 REQUIRED_TRANSLATION_KEYS = (
     "endpoint",
@@ -343,12 +395,29 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ConfigurationError(
             "audio.device_poll_interval_seconds must be greater than zero."
         )
-    _require_keys(config["languages"], REQUIRED_LANGUAGE_KEYS, "languages")
-    for role in REQUIRED_LANGUAGE_KEYS:
-        if config["languages"][role] not in SUPPORTED_LANGUAGE_CODES:
-            raise ConfigurationError(
-                f"languages.{role} must be one of: ca, en, es, fr."
-            )
+    barge_in = config["pipelines"]["agent_to_remote"].get("barge_in")
+    if not isinstance(barge_in, dict):
+        raise ConfigurationError(
+            "pipelines.agent_to_remote.barge_in must be a mapping."
+        )
+    _require_keys(
+        barge_in,
+        REQUIRED_BARGE_IN_KEYS,
+        "pipelines.agent_to_remote.barge_in",
+    )
+    if not isinstance(barge_in["enabled"], bool):
+        raise ConfigurationError(
+            "pipelines.agent_to_remote.barge_in.enabled must be a boolean."
+        )
+    resume_delay_ms = barge_in["resume_delay_ms"]
+    if (
+        not isinstance(resume_delay_ms, (int, float))
+        or isinstance(resume_delay_ms, bool)
+        or resume_delay_ms < 0
+    ):
+        raise ConfigurationError(
+            "pipelines.agent_to_remote.barge_in.resume_delay_ms must not be negative."
+        )
     _require_keys(config["providers"], REQUIRED_PROVIDER_KEYS, "providers")
     _require_keys(config["stt"], REQUIRED_STT_KEYS, "stt")
     stt_rate = config["stt"]["sample_rate"]
@@ -360,6 +429,37 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ConfigurationError(
             "stt.audio_format must be raw PCM matching stt.sample_rate."
         )
+    for key in ("include_timestamps", "no_verbatim"):
+        if not isinstance(config["stt"][key], bool):
+            raise ConfigurationError(f"stt.{key} must be a boolean.")
+    keyterms = config["stt"]["keyterms"]
+    if not isinstance(keyterms, list):
+        raise ConfigurationError("stt.keyterms must be a list of strings.")
+    if len(keyterms) > 50:
+        raise ConfigurationError("stt.keyterms must contain at most 50 terms.")
+    for index, keyterm in enumerate(keyterms):
+        if not isinstance(keyterm, str) or not keyterm.strip():
+            raise ConfigurationError(f"stt.keyterms[{index}] must be a non-empty string.")
+        if len(keyterm) > 20:
+            raise ConfigurationError(
+                f"stt.keyterms[{index}] must contain at most 20 characters."
+            )
+    send_chunk_duration_ms = config["stt"]["send_chunk_duration_ms"]
+    if (
+        not isinstance(send_chunk_duration_ms, int)
+        or isinstance(send_chunk_duration_ms, bool)
+        or not 20 <= send_chunk_duration_ms <= 1000
+    ):
+        raise ConfigurationError(
+            "stt.send_chunk_duration_ms must be an integer between 20 and 1000."
+        )
+    stt_queue_capacity = config["stt"]["queue_capacity_blocks"]
+    if (
+        not isinstance(stt_queue_capacity, int)
+        or isinstance(stt_queue_capacity, bool)
+        or stt_queue_capacity < 1
+    ):
+        raise ConfigurationError("stt.queue_capacity_blocks must be at least one.")
     idle_keepalive = config["stt"].get("idle_keepalive_seconds", 5.0)
     if (
         not isinstance(idle_keepalive, (int, float))
@@ -367,6 +467,46 @@ def load_config(path: Path) -> dict[str, Any]:
         or idle_keepalive < 0
     ):
         raise ConfigurationError("stt.idle_keepalive_seconds must not be negative.")
+    audio_capture = config["stt"]["audio_capture"]
+    _require_keys(audio_capture, REQUIRED_STT_AUDIO_CAPTURE_KEYS, "stt.audio_capture")
+    if not isinstance(audio_capture["enabled"], bool):
+        raise ConfigurationError("stt.audio_capture.enabled must be a boolean.")
+    if (
+        not isinstance(audio_capture["directory"], str)
+        or not audio_capture["directory"].strip()
+    ):
+        raise ConfigurationError("stt.audio_capture.directory must be a non-empty path.")
+    if (
+        not isinstance(audio_capture["max_seconds_per_file"], (int, float))
+        or isinstance(audio_capture["max_seconds_per_file"], bool)
+        or audio_capture["max_seconds_per_file"] <= 0
+    ):
+        raise ConfigurationError(
+            "stt.audio_capture.max_seconds_per_file must be greater than zero."
+        )
+    write_timing_marks = audio_capture.get("write_timing_marks", False)
+    if not isinstance(write_timing_marks, bool):
+        raise ConfigurationError(
+            "stt.audio_capture.write_timing_marks must be a boolean."
+        )
+    write_buffer_kb = audio_capture.get("write_buffer_kb", 64)
+    if (
+        not isinstance(write_buffer_kb, int)
+        or isinstance(write_buffer_kb, bool)
+        or write_buffer_kb < 1
+    ):
+        raise ConfigurationError(
+            "stt.audio_capture.write_buffer_kb must be an integer of at least one."
+        )
+    capture_flush_interval = audio_capture.get("flush_interval_seconds", 0.5)
+    if (
+        not isinstance(capture_flush_interval, (int, float))
+        or isinstance(capture_flush_interval, bool)
+        or capture_flush_interval <= 0
+    ):
+        raise ConfigurationError(
+            "stt.audio_capture.flush_interval_seconds must be greater than zero."
+        )
     _require_keys(config["translation"], REQUIRED_TRANSLATION_KEYS, "translation")
     _require_keys(config["tts"], REQUIRED_TTS_KEYS, "tts")
     tts_rate = config["tts"]["sample_rate"]
@@ -415,6 +555,12 @@ def load_config(path: Path) -> dict[str, Any]:
             )
     _require_keys(config["logging"], REQUIRED_LOGGING_KEYS, "logging")
     logging_config = config["logging"]
+    file_logging_enabled = logging_config.get("file_enabled", True)
+    if not isinstance(file_logging_enabled, bool):
+        raise ConfigurationError("logging.file_enabled must be a boolean.")
+    metrics_enabled = logging_config.get("metrics_enabled", True)
+    if not isinstance(metrics_enabled, bool):
+        raise ConfigurationError("logging.metrics_enabled must be a boolean.")
     if (
         not isinstance(logging_config["log_file"], str)
         or not logging_config["log_file"].strip()
@@ -448,6 +594,15 @@ def load_config(path: Path) -> dict[str, Any]:
         or logging_config["log_queue_capacity"] < 1
     ):
         raise ConfigurationError("logging.log_queue_capacity must be at least one.")
+    file_flush_interval = logging_config.get("file_flush_interval_seconds", 2.0)
+    if (
+        not isinstance(file_flush_interval, (int, float))
+        or isinstance(file_flush_interval, bool)
+        or file_flush_interval < 0
+    ):
+        raise ConfigurationError(
+            "logging.file_flush_interval_seconds must not be negative."
+        )
     _require_keys(config["server"], REQUIRED_SERVER_KEYS, "server")
     if not isinstance(config["pipelines"], dict):
         raise ConfigurationError("Configuration section 'pipelines' must be a mapping.")

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,35 +10,60 @@
     body { margin: 0; min-height: 100vh; background: #f7f8fa; }
     main { width: min(820px, calc(100% - 28px)); margin: 0 auto; padding: 16px 0; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-    h1 { margin: 0; font-size: clamp(1.4rem, 3vw, 1.7rem); letter-spacing: -.035em; }
+    h1 { margin: 0; font-size: clamp(1.4rem, 3vw, 1.7rem); }
+    h2 { margin: 0 0 10px; font-size: .95rem; font-weight: 700; }
+    button { border: 0; border-radius: 7px; padding: 8px; background: transparent; color: #6f7888; cursor: pointer; font: inherit; font-size: .84rem; font-weight: 650; transition: .15s ease; }
+    button:hover { color: #172033; background: #fff9; }
+    button.active, button[aria-pressed="true"], .tabs button[aria-selected="true"] { color: #12673d; background: #fff; box-shadow: 0 1px 4px #1720331c; }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    select { width: 100%; border: 1px solid #d9dde5; border-radius: 8px; padding: 7px 9px; background: #fff; color: #172033; font: inherit; font-size: .82rem; cursor: pointer; }
+    select:focus { outline: 2px solid #25a76555; outline-offset: 1px; }
+    [hidden] { display: none !important; }
     .eyebrow { margin-bottom: 1px; color: #7b8495; text-transform: uppercase; letter-spacing: .11em; font-size: .58rem; font-weight: 700; }
+    .header-actions { display: flex; align-items: center; gap: 10px; }
+    .ui-language { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: #e9ecf1; }
+    .ui-language button { min-width: 58px; padding: 7px 9px; }
     .connection { display: flex; align-items: center; gap: 7px; color: #697386; font-size: .82rem; }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: #e5a12d; }
     .connected .dot { background: #25a765; }
     .tabs { display: flex; gap: 4px; margin-bottom: 10px; padding: 3px; border-radius: 10px; background: #e9ecf1; }
     .tabs button { flex: 1; }
-    .tabs button[aria-selected="true"] { color: #12673d; background: #fff; box-shadow: 0 1px 4px #1720331c; }
     .tab-panel:focus { outline: none; }
-    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-    .languages { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 8px; }
-    .voice-selector { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 8px; padding: 10px 12px; border: 1px solid #e3e6eb; border-radius: 10px; background: #fff; }
+    .grid, .languages, .voice-recording-row, .audio-devices, .routing-grid, .help-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .languages, .audio-devices { margin-bottom: 8px; }
+    .language-field, .device-field, .card, .virtual-routing, .help-card, .transcription-panel { border: 1px solid #e3e6eb; border-radius: 10px; background: #fff; }
+    .language-field, .device-field { display: grid; gap: 5px; padding: 10px 12px; }
+    .language-field label { color: #606a7c; font-size: .78rem; font-weight: 650; }
+    .device-field label { color: #343d4e; font-size: .84rem; font-weight: 700; }
+    .device-status { min-height: 1.2em; color: #687386; font-size: .75rem; }
+    .device-status.info { color: #687386; font-weight: 500; }
+    .device-status.warning { color: #b54708; font-weight: 650; }
+    .voice-recording-row { margin-bottom: 8px; }
+    .voice-selector { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0; padding: 10px 12px; border: 1px solid #e3e6eb; border-radius: 10px; background: #fff; }
     .voice-selector legend { padding: 0; color: #606a7c; font-size: .78rem; font-weight: 650; }
     .voice-options { display: flex; gap: 6px; }
     .voice-option { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid #d9dde5; border-radius: 8px; color: #343d4e; font-size: .82rem; font-weight: 650; cursor: pointer; }
     .voice-option:has(input:checked) { border-color: #8dd4aa; background: #e8f7ee; color: #12673d; }
     .voice-option input { margin: 0; accent-color: #198754; }
-    .audio-devices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 8px; }
-    .language-field { display: grid; gap: 5px; padding: 10px 12px; border-radius: 10px; background: #fff; border: 1px solid #e3e6eb; }
-    .language-field label { color: #606a7c; font-size: .78rem; font-weight: 650; }
-    .device-field { display: grid; gap: 5px; padding: 10px 12px; border-radius: 10px; background: #fff; border: 1px solid #e3e6eb; }
-    .device-field label { color: #343d4e; font-size: .84rem; font-weight: 700; }
-    .device-fixed { display: flex; align-items: center; min-height: 36px; padding: 7px 9px; border: 1px solid #d9dde5; border-radius: 8px; background: #fff; color: #172033; }
-    .device-fixed .device-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .82rem; line-height: 1.2; }
-    .device-status { min-height: 1.2em; color: #687386; font-size: .75rem; }
-    .device-status.warning { color: #b54708; font-weight: 650; }
-    .virtual-routing { margin-top: 8px; padding: 12px; border: 1px solid #e3e6eb; border-radius: 10px; background: #fff; }
-    .virtual-routing h2 { margin-bottom: 10px; }
-    .routing-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .audio-recording { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0; padding: 10px 12px; border: 1px solid #e3e6eb; border-radius: 10px; background: #fff; }
+    .recording-state { display: flex; align-items: center; gap: 9px; min-width: 0; }
+    .recording-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: #aab2c0; }
+    .audio-recording.active .recording-dot { background: #d92d20; box-shadow: 0 0 0 3px #fee4e2; }
+    .recording-copy { display: grid; gap: 2px; }
+    .recording-copy strong { color: #343d4e; font-size: .82rem; }
+    .recording-copy span { color: #687386; font-size: .74rem; }
+    .recording-button { border: 1px solid #d9dde5; padding: 7px 10px; background: #f7f8fa; color: #343d4e; }
+    .audio-recording.active .recording-button { border-color: #f4b4ae; color: #b42318; }
+    .card { padding: 13px; }
+    .choice { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border-radius: 9px; background: #f0f2f5; gap: 3px; }
+    .pipeline-gate { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 8px 10px; border-radius: 8px; background: #f5f7f9; color: #687386; font-size: .8rem; font-weight: 650; }
+    .pipeline-gate.failed { background: #fff4ed; color: #b54708; }
+    .spinner { width: 16px; height: 16px; flex: 0 0 auto; border: 2px solid #ccd2da; border-top-color: #25a765; border-radius: 50%; animation: spin .8s linear infinite; }
+    .pipeline-gate.failed .spinner { display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .mode { margin-top: 8px; display: flex; justify-content: space-between; gap: 10px; color: #7b8495; font-size: .76rem; }
+    .mode strong { color: #343d4e; }
+    .virtual-routing { margin-top: 8px; padding: 12px; }
     .route-field { display: grid; align-content: start; gap: 8px; padding: 10px; border: 1px solid #e6e9ee; border-radius: 9px; background: #fafbfc; }
     .route-heading { display: flex; align-items: center; gap: 8px; }
     .route-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border-radius: 8px; background: #edf1f5; font-size: 1rem; }
@@ -51,38 +76,24 @@
     .route-empty { border: 1px dashed #d2d7df; color: #7b8495; }
     .route-warning { border: 1px solid #f1c27d; background: #fff7e8; color: #92400e; font-weight: 650; }
     .route-warning strong { display: block; margin-bottom: 2px; color: #7c2d12; }
-    .route-warning span:last-child { min-width: 0; }
-    select { width: 100%; border: 1px solid #d9dde5; border-radius: 8px; padding: 7px 9px; background: #fff; color: #172033; font: inherit; font-size: .82rem; cursor: pointer; }
-    select:focus { outline: 2px solid #25a76555; outline-offset: 1px; }
-    .card { padding: 13px; border: 1px solid #e3e6eb; border-radius: 10px; background: #fff; }
-    h2 { margin: 0 0 10px; font-size: .95rem; font-weight: 700; }
-    [hidden] { display: none !important; }
-    .choice { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border-radius: 9px; background: #f0f2f5; gap: 3px; }
-    .pipeline-gate { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 8px 10px; border-radius: 8px; background: #f5f7f9; color: #687386; font-size: .8rem; font-weight: 650; }
-    .pipeline-gate.failed { background: #fff4ed; color: #b54708; }
-    .spinner { width: 16px; height: 16px; flex: 0 0 auto; border: 2px solid #ccd2da; border-top-color: #25a765; border-radius: 50%; animation: spin .8s linear infinite; }
-    .pipeline-gate.failed .spinner { display: none; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    button { border: 0; border-radius: 7px; padding: 8px; background: transparent; color: #6f7888; cursor: pointer; font: inherit; font-size: .84rem; font-weight: 650; transition: .15s ease; }
-    button:hover { color: #172033; background: #fff9; }
-    button.active { color: #12673d; background: #fff; box-shadow: 0 1px 4px #1720331c; }
-    button:disabled { cursor: not-allowed; opacity: .45; }
-    .mode { margin-top: 8px; display: flex; justify-content: space-between; gap: 10px; color: #7b8495; font-size: .76rem; }
-    .mode strong { color: #343d4e; }
-    .error { color: #b42318; margin-top: 8px; font-size: .82rem; }
-    .error:empty { display: none; }
-    .transcription-panel { min-height: 420px; padding: 14px; border: 1px solid #e3e6eb; border-radius: 10px; background: #fff; }
+    .transcription-panel { min-height: 420px; padding: 14px; }
     .transcription-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
     .transcription-heading h2 { margin-bottom: 3px; }
     .transcription-heading p { margin: 0; color: #7b8495; font-size: .78rem; }
     .clear-transcription { flex: 0 0 auto; border: 1px solid #d9dde5; padding-inline: 10px; }
     .transcription-empty { display: grid; place-items: center; min-height: 300px; color: #7b8495; text-align: center; font-size: .86rem; }
-    .transcription-list { display: grid; gap: 9px; max-height: 65vh; overflow-y: auto; }
+    .transcription-list { display: grid; gap: 12px; max-height: 65vh; overflow-y: auto; }
     .transcript-entry { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid #e3e6eb; border-radius: 9px; background: #fafbfc; overflow: hidden; }
-    .source-block, .translated-block { min-width: 0; padding: 11px 12px; }
-    .transcript-label { margin-bottom: 3px; color: #7b8495; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
-    .transcript-text { margin: 0; color: #20293a; line-height: 1.45; }
+    .transcript-entry.remote-turn { border-left: 4px solid #3b82f6; }
+    .transcript-entry.agent-turn { border-left: 4px solid #25a765; }
+    .transcript-speaker { grid-column: 1 / -1; padding: 8px 14px; border-bottom: 1px solid #e3e6eb; color: #344054; font-size: .75rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+    .remote-turn .transcript-speaker { background: #eff6ff; color: #1d4ed8; }
+    .agent-turn .transcript-speaker { background: #eefbf3; color: #12673d; }
+    .source-block, .translated-block { min-width: 0; padding: 13px 14px; }
     .translated-block { border-left: 1px solid #e3e6eb; background: #f5fbf7; }
+    .transcript-label { margin-bottom: 3px; color: #7b8495; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+    .transcript-text { margin: 0; color: #20293a; line-height: 1.55; }
+    .transcript-meta { margin-top: 8px; color: #8a94a5; font-size: .68rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
     .translated-block .transcript-text { color: #12673d; }
     .translation-pending { color: #8a94a5 !important; font-style: italic; }
     .help-panel { display: grid; gap: 10px; }
@@ -91,231 +102,359 @@
     .help-intro h2 { margin-bottom: 5px; color: #12673d; font-size: 1.05rem; }
     .help-intro p, .help-card p { margin: 0; color: #596477; font-size: .84rem; line-height: 1.55; }
     .help-version { margin-top: 8px; color: #12673d; font-size: .75rem; font-weight: 700; }
-    .help-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-    .help-card { padding: 14px; border: 1px solid #e3e6eb; border-radius: 10px; background: #fff; }
+    .help-card { padding: 14px; }
     .help-card h3 { margin: 0 0 8px; color: #2e3747; font-size: .9rem; }
     .help-card ol, .help-card ul { display: grid; gap: 7px; margin: 0; padding-left: 20px; color: #596477; font-size: .82rem; line-height: 1.45; }
     .help-notice { padding: 13px 14px; border: 1px solid #f1c27d; border-radius: 10px; background: #fff7e8; color: #7c2d12; font-size: .83rem; line-height: 1.5; }
     .help-notice strong { display: block; margin-bottom: 3px; }
-    @media (max-width: 700px) { header { align-items: flex-start; } .grid, .languages, .audio-devices, .routing-grid, .transcript-entry, .help-grid { grid-template-columns: 1fr; } .translated-block { border-top: 1px solid #e3e6eb; border-left: 0; } .voice-selector { align-items: flex-start; flex-direction: column; } main { padding-top: 14px; } }
+    .error { color: #b42318; margin-top: 8px; font-size: .82rem; }
+    .error:empty { display: none; }
+    @media (max-width: 700px) {
+      header { align-items: flex-start; }
+      .header-actions { align-items: flex-end; flex-direction: column; }
+      .grid, .languages, .voice-recording-row, .audio-devices, .routing-grid, .transcript-entry, .help-grid { grid-template-columns: 1fr; }
+      .translated-block { border-top: 1px solid #e3e6eb; border-left: 0; }
+      .voice-selector { align-items: flex-start; flex-direction: column; }
+      main { padding-top: 14px; }
+    }
   </style>
 </head>
 <body>
   <main>
     <header>
-      <div><div class="eyebrow">Control panel</div><h1>Twin Tongue</h1></div>
-      <div id="connection" class="connection"><span class="dot"></span><span>Conectando…</span></div>
+      <div><div class="eyebrow" data-i18n="eyebrow">Control panel</div><h1>Twin Tongue</h1></div>
+      <div class="header-actions">
+        <div class="ui-language" aria-label="Interface language">
+          <button type="button" data-ui-language="es" aria-pressed="false" title="Español">🇪🇸 ES</button>
+          <button type="button" data-ui-language="en" aria-pressed="true" title="English">🇬🇧 EN</button>
+        </div>
+        <div id="connection" class="connection"><span class="dot"></span><span>Connecting...</span></div>
+      </div>
     </header>
-    <nav class="tabs" role="tablist" aria-label="Secciones del panel">
-      <button id="control-tab" role="tab" aria-selected="true" aria-controls="control-panel" data-tab="control-panel">Control</button>
-      <button id="transcription-tab" role="tab" aria-selected="false" aria-controls="transcription-panel" data-tab="transcription-panel">Transcripción</button>
-      <button id="help-tab" role="tab" aria-selected="false" aria-controls="help-panel" data-tab="help-panel">Ayuda</button>
+    <nav class="tabs" role="tablist" aria-label="Panel sections">
+      <button id="control-tab" role="tab" aria-selected="true" aria-controls="control-panel" data-tab="control-panel" data-i18n="tabControl">Control</button>
+      <button id="transcription-tab" role="tab" aria-selected="false" aria-controls="transcription-panel" data-tab="transcription-panel" data-i18n="tabTranscription">Transcription</button>
+      <button id="help-tab" role="tab" aria-selected="false" aria-controls="help-panel" data-tab="help-panel" data-i18n="tabHelp">Help</button>
     </nav>
     <section id="control-panel" class="tab-panel" role="tabpanel" aria-labelledby="control-tab">
-    <section class="languages" aria-label="Idiomas de la conversación">
-      <div class="language-field">
-        <label for="remote-language">💬 Idioma de la otra persona</label>
-        <select id="remote-language" data-role="remote"></select>
-      </div>
-      <div class="language-field">
-        <label for="agent-language">🗣️ Tu idioma (agente)</label>
-        <select id="agent-language" data-role="agent"></select>
-      </div>
-    </section>
-    <fieldset class="voice-selector">
-      <legend>Voz de la traducción</legend>
-      <div class="voice-options">
-        <label class="voice-option"><input type="radio" name="voice-gender" value="male"> Hombre</label>
-        <label class="voice-option"><input type="radio" name="voice-gender" value="female"> Mujer</label>
-      </div>
-    </fieldset>
-    <section class="audio-devices" aria-label="Micrófono y dispositivo de escucha del agente">
-      <div class="device-field">
-        <label>🔊 Tus altavoces o auriculares son:</label>
-        <div class="device-fixed" data-audio-direction="output" aria-live="polite"><span class="device-name">—</span></div>
-        <div class="device-status" aria-live="polite" hidden></div>
-      </div>
-      <div class="device-field">
-        <label>🎙️ Tu micrófono es:</label>
-        <div class="device-fixed" data-audio-direction="input" aria-live="polite"><span class="device-name">—</span></div>
-        <div class="device-status" aria-live="polite" hidden></div>
-      </div>
-    </section>
-    <section class="grid">
-      <article class="card" data-pipeline="remote_to_agent">
-        <h2>🎧 Audio que escuchas tú</h2>
-        <div class="pipeline-gate" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span>Cargando el sistema…</span></div>
-        <div class="choice" hidden>
-          <button data-mode="translate">Traducido</button><button data-mode="passthrough">Sin traducir</button>
+      <section class="languages" aria-label="Conversation languages">
+        <div class="language-field">
+          <label for="remote-language" data-i18n="remoteLanguage">Other person's language</label>
+          <select id="remote-language" data-role="remote"></select>
         </div>
-        <div class="mode"><span>Ahora escuchas</span><strong>—</strong></div>
-      </article>
-      <article class="card" data-pipeline="agent_to_remote">
-        <h2>📞 Audio que escucha la otra persona</h2>
-        <div class="pipeline-gate" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span>Cargando el sistema…</span></div>
-        <div class="choice" hidden>
-          <button data-mode="translate">Traducido</button><button data-mode="passthrough">Sin traducir</button>
+        <div class="language-field">
+          <label for="agent-language" data-i18n="agentLanguage">Your language</label>
+          <select id="agent-language" data-role="agent"></select>
         </div>
-        <div class="mode"><span>Ahora escucha</span><strong>—</strong></div>
-      </article>
-    </section>
-    <section class="virtual-routing" aria-label="Conexiones VB-CABLE">
-      <h2>Conexiones de la llamada</h2>
-      <div class="routing-grid">
-        <div class="route-field" data-cable-route="remote_input">
-          <div class="route-heading"><span class="route-icon" aria-hidden="true">🔊</span><div class="route-name">Altavoz de la llamada<span class="route-cable">CABLE A</span></div></div>
-          <div class="application-list" aria-live="polite"></div>
+      </section>
+      <section class="voice-recording-row" aria-label="Translation voice and diagnostic recording">
+        <fieldset class="voice-selector">
+          <legend data-i18n="voiceLegend">Translated voice</legend>
+          <div class="voice-options">
+            <label class="voice-option"><input type="radio" name="voice-gender" value="male"> <span data-i18n="male">Male</span></label>
+            <label class="voice-option"><input type="radio" name="voice-gender" value="female"> <span data-i18n="female">Female</span></label>
+          </div>
+        </fieldset>
+        <section id="audio-recording" class="audio-recording" aria-live="polite" hidden>
+          <div class="recording-state">
+            <span class="recording-dot" aria-hidden="true"></span>
+            <div class="recording-copy">
+              <strong data-i18n="recordingTitle">Diagnostic recording</strong>
+              <span id="recording-status"></span>
+            </div>
+          </div>
+          <button id="recording-button" class="recording-button" type="button"></button>
+        </section>
+      </section>
+      <section class="audio-devices" aria-label="Agent microphone and listening device">
+        <div class="device-field">
+          <label for="agent-output-device" data-i18n="speakerLabel">Your speakers or headphones are:</label>
+          <select id="agent-output-device" class="device-select" data-audio-direction="output"></select>
+          <div class="device-status" aria-live="polite" hidden></div>
         </div>
-        <div class="route-field" data-cable-route="translated_output">
-          <div class="route-heading"><span class="route-icon" aria-hidden="true">🎙️</span><div class="route-name">Micrófono de la llamada<span class="route-cable">CABLE B</span></div></div>
-          <div class="application-list" aria-live="polite"></div>
+        <div class="device-field">
+          <label for="agent-input-device" data-i18n="micLabel">Your microphone is:</label>
+          <select id="agent-input-device" class="device-select" data-audio-direction="input"></select>
+          <div class="device-status" aria-live="polite" hidden></div>
         </div>
-      </div>
-    </section>
+      </section>
+      <section class="grid">
+        <article class="card" data-pipeline="remote_to_agent">
+          <h2 data-i18n="remotePipelineTitle">Audio you hear</h2>
+          <div class="pipeline-gate" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span data-i18n="loadingOriginal">Loading system... Original audio is active.</span></div>
+          <div class="choice" hidden>
+            <button data-mode="translate" data-i18n="translated">Translated</button><button data-mode="passthrough" data-i18n="untranslated">Untranslated</button>
+          </div>
+          <div class="mode"><span data-i18n="youHear">You currently hear</span><strong>-</strong></div>
+        </article>
+        <article class="card" data-pipeline="agent_to_remote">
+          <h2 data-i18n="agentPipelineTitle">Audio the other person hears</h2>
+          <div class="pipeline-gate" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span data-i18n="loadingOriginal">Loading system... Original audio is active.</span></div>
+          <div class="choice" hidden>
+            <button data-mode="translate" data-i18n="translated">Translated</button><button data-mode="passthrough" data-i18n="untranslated">Untranslated</button>
+          </div>
+          <div class="mode"><span data-i18n="theyHear">They currently hear</span><strong>-</strong></div>
+        </article>
+      </section>
+      <section class="virtual-routing" aria-label="VB-CABLE connections">
+        <h2 data-i18n="callConnections">Call connections</h2>
+        <div class="routing-grid">
+          <div class="route-field" data-cable-route="remote_input">
+            <div class="route-heading"><span class="route-icon" aria-hidden="true">🔊</span><div class="route-name"><span data-i18n="callSpeaker">Call speaker</span><span class="route-cable">CABLE A</span></div></div>
+            <div class="application-list" aria-live="polite"></div>
+          </div>
+          <div class="route-field" data-cable-route="translated_output">
+            <div class="route-heading"><span class="route-icon" aria-hidden="true">🎙️</span><div class="route-name"><span data-i18n="callMic">Call microphone</span><span class="route-cable">CABLE B</span></div></div>
+            <div class="application-list" aria-live="polite"></div>
+          </div>
+        </div>
+      </section>
     </section>
     <section id="transcription-panel" class="tab-panel transcription-panel" role="tabpanel" aria-labelledby="transcription-tab" hidden>
       <div class="transcription-heading">
-        <div><h2>Transcripción del agente</h2><p>Frases finales reconocidas y texto que se sintetiza para el cliente.</p></div>
-        <button id="clear-transcription" class="clear-transcription" type="button">Limpiar</button>
+        <div><h2 data-i18n="transcriptionTitle">Conversation transcription</h2><p data-i18n="transcriptionDescription">Recognized and translated phrases from both sides of the conversation.</p></div>
+        <button id="clear-transcription" class="clear-transcription" type="button" data-i18n="clear">Clear</button>
       </div>
-      <div id="transcription-empty" class="transcription-empty">Las frases aparecerán aquí cuando la traducción esté activa y empieces a hablar.</div>
+      <div id="transcription-empty" class="transcription-empty" data-i18n="emptyTranscription">Phrases will appear here when translation is active and either person starts speaking.</div>
       <div id="transcription-list" class="transcription-list" aria-live="polite"></div>
     </section>
     <section id="help-panel" class="tab-panel help-panel" role="tabpanel" aria-labelledby="help-tab" hidden>
       <div class="help-intro">
-        <h2>Cómo usar Twin Tongue</h2>
-        <p>El panel te permite decidir qué audio se traduce durante una llamada y comprobar lo que la herramienta ha entendido cuando hablas.</p>
-        <div class="help-version">Versión <span id="application-version">—</span></div>
+        <h2 data-i18n="helpTitle">How to use Twin Tongue</h2>
+        <p data-i18n="helpIntro">The panel lets you decide which audio is translated during a call and verify what the tool understood when you speak.</p>
+        <div class="help-version"><span data-i18n="version">Version</span> <span id="application-version">-</span></div>
       </div>
       <div class="help-grid">
         <article class="help-card">
-          <h3>Antes de empezar</h3>
+          <h3 data-i18n="beforeStartTitle">Before you start</h3>
           <ol>
-            <li>Comprueba que el panel indique <strong>Conectado</strong>.</li>
-            <li>Selecciona tu idioma y el de la otra persona.</li>
-            <li>Elige la voz de hombre o mujer para la traducción.</li>
-            <li>Inicia la llamada. Cuando esté activa, comprueba que la aplicación aparezca en las dos conexiones.</li>
+            <li data-i18n="beforeStart1">Check that the panel says Connected.</li>
+            <li data-i18n="beforeStart2">Select your language and the other person's language.</li>
+            <li data-i18n="beforeStart3">Choose a male or female voice for translation.</li>
+            <li data-i18n="beforeStart4">Start the call and check that the application appears in both connections.</li>
           </ol>
         </article>
         <article class="help-card">
-          <h3>Control de la conversación</h3>
+          <h3 data-i18n="conversationControlTitle">Conversation control</h3>
           <ul>
-            <li><strong>Audio que escuchas tú:</strong> elige si quieres oír a la otra persona traducida o sin traducir.</li>
-            <li><strong>Audio que escucha la otra persona:</strong> elige cómo quieres que reciba tu voz.</li>
-            <li>Cuando actives la traducción, espera al mensaje <strong>Listo: puedes empezar a hablar</strong>.</li>
-            <li>Si la traducción no está disponible, el panel mantiene activo el audio original.</li>
+            <li data-i18n="conversationControl1">Audio you hear controls whether the other person reaches you translated or unchanged.</li>
+            <li data-i18n="conversationControl2">Audio the other person hears controls whether your voice reaches them translated or unchanged.</li>
+            <li data-i18n="conversationControl3">When you enable translation, wait until the panel says Ready.</li>
+            <li data-i18n="conversationControl4">If translation is not available, original audio remains active.</li>
           </ul>
         </article>
         <article class="help-card">
-          <h3>Para que te entienda mejor</h3>
+          <h3 data-i18n="clarityTitle">For better recognition</h3>
           <ul>
-            <li>Habla con un volumen alto y claro, sin alejarte demasiado del micrófono.</li>
-            <li>Usa frases claras y deja una pequeña pausa entre ideas.</li>
-            <li>Evita hablar a la vez que la otra persona siempre que sea posible.</li>
-            <li>Reduce el ruido de fondo y utiliza auriculares para evitar ecos.</li>
+            <li data-i18n="clarity1">Speak clearly and keep a steady volume.</li>
+            <li data-i18n="clarity2">Use clear phrases and leave a short pause between ideas.</li>
+            <li data-i18n="clarity3">Avoid speaking over the other person when possible.</li>
+            <li data-i18n="clarity4">Reduce background noise and use headphones to avoid echo.</li>
           </ul>
         </article>
         <article class="help-card">
-          <h3>Revisar la transcripción</h3>
-          <p>La pestaña <strong>Transcripción</strong> muestra en dos columnas lo que la herramienta ha entendido y la traducción enviada a la otra persona. Úsala para detectar palabras confusas, repetir una frase o explicar una idea de otra manera. Puedes vaciar la lista con <strong>Limpiar</strong>.</p>
+          <h3 data-i18n="reviewTitle">Review transcription</h3>
+          <p data-i18n="reviewText">The Transcription tab shows what the tool understood and the translation sent to the other person. Use it to detect unclear words, repeat a phrase, or explain an idea differently.</p>
         </article>
       </div>
       <div class="help-notice">
-        <strong>Ten en cuenta</strong>
-        La transcripción y la traducción pueden contener errores, especialmente con ruido, nombres propios, acentos muy marcados o si se habla demasiado bajo o rápido. La traducción tampoco es instantánea: escuchar, interpretar, traducir y reproducir una frase necesita unos segundos. Espera antes de repetirla y deja que la otra persona termine para mantener una conversación más fluida.
+        <strong data-i18n="noticeTitle">Keep in mind</strong>
+        <span data-i18n="noticeText">Transcription and translation can contain errors, especially with noise, names, strong accents, or very fast speech. Translation also takes a few seconds because the system must listen, interpret, translate, and play the phrase.</span>
       </div>
     </section>
     <div id="error" class="error" role="alert"></div>
   </main>
   <script>
-    const labels = { translate: "el audio traducido", passthrough: "el audio sin traducir" };
-    const statusLabels = {
-      starting: "Preparando el audio…",
-      system_loading: "Cargando el sistema · audio original activo",
-      switching: "Aplicando el cambio…",
-      initializing: "Preparando la traducción…",
-      translation_unavailable: "Traducción no disponible · audio original activo",
-      translation_ready: "Listo: puedes empezar a hablar",
-      passthrough: "el audio sin traducir",
-      error: "Error al preparar el audio"
+    const translations = {
+      en: {
+        eyebrow: "Control panel", connecting: "Connecting...", connected: "Connected", reconnecting: "Reconnecting...",
+        tabControl: "Control", tabTranscription: "Transcription", tabHelp: "Help",
+        remoteLanguage: "Other person's language", agentLanguage: "Your language", voiceLegend: "Translated voice", male: "Male", female: "Female",
+        speakerLabel: "Your speakers or headphones are:", micLabel: "Your microphone is:",
+        remotePipelineTitle: "Audio you hear", agentPipelineTitle: "Audio the other person hears", loadingOriginal: "Loading system... Original audio is active.",
+        translated: "Translated", untranslated: "Untranslated", youHear: "You currently hear", theyHear: "They currently hear",
+        callConnections: "Call connections", callSpeaker: "Call speaker", callMic: "Call microphone",
+        transcriptionTitle: "Conversation transcription", transcriptionDescription: "Recognized and translated phrases from both sides of the conversation.", clear: "Clear",
+        emptyTranscription: "Phrases will appear here when translation is active and either person starts speaking.",
+        recordingTitle: "Diagnostic recording", recordingReady: "Ready for a manual recording.", recordingAutomatic: "Recording automatically while translation is active.", recordingManual: "Manual recording is active.", startRecording: "Start recording", stopRecording: "Stop recording", recordingFailed: "Could not change audio recording.",
+        helpTitle: "How to use Twin Tongue", helpIntro: "The panel lets you decide which audio is translated during a call and verify what the tool understood when you speak.", version: "Version",
+        beforeStartTitle: "Before you start", beforeStart1: "Check that the panel says Connected.", beforeStart2: "Select your language and the other person's language.", beforeStart3: "Choose a male or female voice for translation.", beforeStart4: "Start the call and check that the application appears in both connections.",
+        conversationControlTitle: "Conversation control", conversationControl1: "Audio you hear controls whether the other person reaches you translated or unchanged.", conversationControl2: "Audio the other person hears controls whether your voice reaches them translated or unchanged.", conversationControl3: "When you enable translation, wait until the panel says Ready.", conversationControl4: "If translation is not available, original audio remains active.",
+        clarityTitle: "For better recognition", clarity1: "Speak clearly and keep a steady volume.", clarity2: "Use clear phrases and leave a short pause between ideas.", clarity3: "Avoid speaking over the other person when possible.", clarity4: "Reduce background noise and use headphones to avoid echo.",
+        reviewTitle: "Review transcription", reviewText: "The Transcription tab shows what Twin Tongue understood and translated for both people. Use it to detect unclear words, repeat a phrase, or explain an idea differently.",
+        noticeTitle: "Keep in mind", noticeText: "Transcription and translation can contain errors, especially with noise, names, strong accents, or very fast speech. Translation also takes a few seconds because the system must listen, interpret, translate, and play the phrase.",
+        labels: { translate: "translated audio", passthrough: "untranslated audio" },
+        statusLabels: { starting: "Preparing audio...", system_loading: "Loading system - original audio active", switching: "Applying change...", initializing: "Preparing translation...", translation_unavailable: "Translation unavailable - original audio active", translation_ready: "Ready: you can start speaking", passthrough: "untranslated audio", error: "Audio setup error" },
+        languages: { en: "English", es: "Spanish", fr: "French", ca: "Catalan" },
+        noDevice: "No audio device available", noAudioDevice: "No audio device is available", automaticDevice: "Automatic (Windows communications device)", defaultDevice: "default", savedDevicePending: "Using this device for now:", savedDeviceWillReturn: "Twin Tongue will restore your saved selection when Windows makes it available.", savedDeviceSelection: "saved selection", cableUnavailable: "Cable unavailable", callApplicationDisconnected: "No call application connected", checkVbCable: "Check the VB-CABLE installation.", selectCableA: "Select CABLE A as the speaker in the call application.", selectCableB: "Select CABLE B as the microphone in the call application.", noConnectedApp: "No connected application", appConnected: "Application connected to this cable",
+        audioNotStarted: "Audio not started", remoteSpeaker: "Other person", agentSpeaker: "You", remoteSaid: "Other person said", agentHears: "You hear", agentSaid: "You said", remoteHears: "Other person hears", paragraphMeta: "Paragraph", segmentsMeta: "segments", notTranslated: "It was not translated.", translating: "Translating...", clearFailed: "Could not clear transcription.", languageFailed: "Could not change the language.", uiLanguageFailed: "Could not change the interface language.", voiceFailed: "Could not change the voice.", deviceFailed: "Could not change the audio device.", modeFailed: "Could not change the mode.", translationFailedDetail: "Translation could not be prepared. Original audio remains active."
+      },
+      es: {
+        eyebrow: "Panel de control", connecting: "Conectando...", connected: "Conectado", reconnecting: "Reconectando...",
+        tabControl: "Control", tabTranscription: "Transcripción", tabHelp: "Ayuda",
+        remoteLanguage: "Idioma de la otra persona", agentLanguage: "Tu idioma", voiceLegend: "Voz de la traducción", male: "Hombre", female: "Mujer",
+        speakerLabel: "Tus altavoces o auriculares son:", micLabel: "Tu micrófono es:",
+        remotePipelineTitle: "Audio que escuchas tú", agentPipelineTitle: "Audio que escucha la otra persona", loadingOriginal: "Cargando el sistema... El audio original está activo.",
+        translated: "Traducido", untranslated: "Sin traducir", youHear: "Ahora escuchas", theyHear: "Ahora escucha",
+        callConnections: "Conexiones de la llamada", callSpeaker: "Altavoz de la llamada", callMic: "Micrófono de la llamada",
+        transcriptionTitle: "Transcripción de la conversación", transcriptionDescription: "Frases reconocidas y traducidas de los dos interlocutores.", clear: "Limpiar",
+        emptyTranscription: "Las frases aparecerán aquí cuando la traducción esté activa y cualquiera de los dos empiece a hablar.",
+        recordingTitle: "Grabación de diagnóstico", recordingReady: "Lista para iniciar una grabación manual.", recordingAutomatic: "Grabando automáticamente mientras la traducción está activa.", recordingManual: "La grabación manual está activa.", startRecording: "Iniciar grabación", stopRecording: "Detener grabación", recordingFailed: "No se pudo cambiar la grabación de audio.",
+        helpTitle: "Cómo usar Twin Tongue", helpIntro: "El panel te permite decidir qué audio se traduce durante una llamada y comprobar lo que la herramienta ha entendido cuando hablas.", version: "Versión",
+        beforeStartTitle: "Antes de empezar", beforeStart1: "Comprueba que el panel indique Conectado.", beforeStart2: "Selecciona tu idioma y el de la otra persona.", beforeStart3: "Elige voz de hombre o mujer para la traducción.", beforeStart4: "Inicia la llamada y comprueba que la aplicación aparezca en las dos conexiones.",
+        conversationControlTitle: "Control de la conversación", conversationControl1: "Audio que escuchas tú controla si recibes a la otra persona traducida o sin cambios.", conversationControl2: "Audio que escucha la otra persona controla si tu voz llega traducida o sin cambios.", conversationControl3: "Cuando actives la traducción, espera hasta que el panel indique Listo.", conversationControl4: "Si la traducción no está disponible, el audio original permanece activo.",
+        clarityTitle: "Para que te entienda mejor", clarity1: "Habla claro y con volumen estable.", clarity2: "Usa frases claras y deja una pequeña pausa entre ideas.", clarity3: "Evita hablar a la vez que la otra persona siempre que sea posible.", clarity4: "Reduce el ruido de fondo y usa auriculares para evitar eco.",
+        reviewTitle: "Revisar la transcripción", reviewText: "La pestaña Transcripción muestra lo que Twin Tongue ha entendido y traducido para ambos interlocutores. Úsala para detectar palabras confusas, repetir una frase o explicar una idea de otra manera.",
+        noticeTitle: "Ten en cuenta", noticeText: "La transcripción y la traducción pueden contener errores, especialmente con ruido, nombres propios, acentos marcados o habla muy rápida. La traducción también necesita unos segundos porque el sistema debe escuchar, interpretar, traducir y reproducir la frase.",
+        labels: { translate: "el audio traducido", passthrough: "el audio sin traducir" },
+        statusLabels: { starting: "Preparando el audio...", system_loading: "Cargando el sistema - audio original activo", switching: "Aplicando el cambio...", initializing: "Preparando la traducción...", translation_unavailable: "Traducción no disponible - audio original activo", translation_ready: "Listo: puedes empezar a hablar", passthrough: "el audio sin traducir", error: "Error al preparar el audio" },
+        languages: { en: "Inglés", es: "Español", fr: "Francés", ca: "Catalán" },
+        noDevice: "Ningún dispositivo disponible", noAudioDevice: "No hay ningún dispositivo de audio disponible", automaticDevice: "Automático (dispositivo de comunicaciones de Windows)", defaultDevice: "predeterminado", savedDevicePending: "Por ahora se está usando:", savedDeviceWillReturn: "Twin Tongue recuperará la selección guardada cuando Windows vuelva a mostrarla.", savedDeviceSelection: "selección guardada", cableUnavailable: "Cable no disponible", callApplicationDisconnected: "Ninguna aplicación de llamada conectada", checkVbCable: "Comprueba la instalación de VB-CABLE.", selectCableA: "Selecciona CABLE A como altavoz en la aplicación de llamada.", selectCableB: "Selecciona CABLE B como micrófono en la aplicación de llamada.", noConnectedApp: "Ninguna aplicación conectada", appConnected: "Aplicación conectada a este cable",
+        audioNotStarted: "Audio no iniciado", remoteSpeaker: "Otra persona", agentSpeaker: "Tú", remoteSaid: "La otra persona ha dicho", agentHears: "Tú escuchas", agentSaid: "Has dicho", remoteHears: "La otra persona escucha", paragraphMeta: "Párrafo", segmentsMeta: "segmentos", notTranslated: "No llegó a traducirse.", translating: "Traduciendo...", clearFailed: "No se pudo limpiar la transcripción.", languageFailed: "No se pudo cambiar el idioma.", uiLanguageFailed: "No se pudo cambiar el idioma de la interfaz.", voiceFailed: "No se pudo cambiar la voz.", deviceFailed: "No se pudo cambiar el dispositivo de audio.", modeFailed: "No se pudo cambiar el modo.", translationFailedDetail: "No se pudo preparar la traducción. El audio original sigue activo."
+      }
     };
+    let currentState = null;
+    let uiLanguage = "en";
+    let connectionOnline = false;
     const connection = document.querySelector("#connection");
     const errorBox = document.querySelector("#error");
 
+    function t(key) {
+      return translations[uiLanguage][key];
+    }
+
+    function setConnectionState(connected) {
+      connectionOnline = connected;
+      connection.classList.toggle("connected", connected);
+      connection.querySelector("span:last-child").textContent = connected ? t("connected") : t("reconnecting");
+    }
+
+    function applyTranslations() {
+      document.documentElement.lang = uiLanguage;
+      for (const element of document.querySelectorAll("[data-i18n]")) {
+        element.textContent = t(element.dataset.i18n);
+      }
+      document.querySelector("nav.tabs").setAttribute("aria-label", uiLanguage === "es" ? "Secciones del panel" : "Panel sections");
+      document.querySelector(".ui-language").setAttribute("aria-label", uiLanguage === "es" ? "Idioma de la interfaz" : "Interface language");
+      for (const button of document.querySelectorAll("[data-ui-language]")) {
+        button.setAttribute("aria-pressed", String(button.dataset.uiLanguage === uiLanguage));
+      }
+    }
+
     function render(state) {
-      document.querySelector("#application-version").textContent = state.application_version || "—";
+      currentState = state;
+      uiLanguage = state.ui_language || "en";
+      applyTranslations();
+      setConnectionState(connectionOnline);
+      document.querySelector("#application-version").textContent = state.application_version || "-";
       renderTranscription(state);
       for (const radio of document.querySelectorAll('input[name="voice-gender"]')) {
         radio.checked = radio.value === state.voice_gender;
       }
       for (const select of document.querySelectorAll("select[data-role]")) {
-        if (!select.options.length) {
-          for (const language of state.supported_languages) {
-            select.add(new Option(language.label, language.code));
-          }
+        const selectedValue = state.languages[select.dataset.role];
+        select.replaceChildren();
+        for (const language of state.supported_languages) {
+          select.add(new Option(t("languages")[language.code] || language.label, language.code));
         }
-        select.value = state.languages[select.dataset.role];
+        select.value = selectedValue;
       }
       if (state.audio_devices) {
-        for (const display of document.querySelectorAll(".device-fixed[data-audio-direction]")) {
-          const device = state.audio_devices[display.dataset.audioDirection];
-          display.querySelector(".device-name").textContent = device.active_name || "Ningún dispositivo disponible";
-          const status = display.closest(".device-field").querySelector(".device-status");
+        for (const select of document.querySelectorAll("select[data-audio-direction]")) {
+          const device = state.audio_devices[select.dataset.audioDirection];
+          select.replaceChildren();
+          select.add(new Option(t("automaticDevice"), "automatic"));
+          for (const available of device.devices || []) {
+            const suffix = available.default_communications ? ` (${t("defaultDevice")})` : "";
+            select.add(new Option(`${available.name}${suffix}`, available.id));
+          }
+          if (device.mode === "manual" && !device.preferred_available) {
+            select.add(new Option(`${device.preferred_name || device.selection} (${t("savedDeviceSelection")})`, device.selection));
+          }
+          select.value = device.selection || "automatic";
+          const status = select.closest(".device-field").querySelector(".device-status");
           status.textContent = "";
-          status.classList.toggle("warning", !device.active_name);
+          status.classList.remove("warning", "info");
           if (!device.active_name) {
-            status.textContent = "No hay ningún dispositivo de audio disponible";
+            status.textContent = t("noAudioDevice");
+            status.classList.add("warning");
+          } else if (!device.preferred_available) {
+            status.textContent = `${t("savedDevicePending")} ${device.active_name}. ${t("savedDeviceWillReturn")}`;
+            status.classList.add("info");
           }
           status.hidden = !status.textContent;
         }
       }
-      if (state.virtual_cables) {
-        for (const field of document.querySelectorAll(".route-field")) {
-          const routeName = field.dataset.cableRoute;
-          const route = state.virtual_cables[routeName];
-          const pipelineName = routeName === "remote_input" ? "remote_to_agent" : "agent_to_remote";
-          const translationActive = state.pipelines[pipelineName]?.status === "translation_ready";
-          const applications = field.querySelector(".application-list");
-          applications.replaceChildren();
-          if (route.unavailable || (translationActive && !route.applications.length)) {
-            const warning = document.createElement("div");
-            warning.className = "route-warning";
-            const icon = document.createElement("span");
-            icon.setAttribute("aria-hidden", "true");
-            icon.textContent = "⚠️";
-            const message = document.createElement("span");
-            const title = document.createElement("strong");
-            title.textContent = route.unavailable ? "Cable no disponible" : "Traducción sin conexión";
-            const detail = document.createElement("span");
-            detail.textContent = route.unavailable
-              ? "Comprueba la instalación de VB-CABLE."
-              : routeName === "remote_input"
-                ? "Selecciona CABLE A como altavoz en la aplicación de llamada."
-                : "Selecciona CABLE B como micrófono en la aplicación de llamada.";
-            message.append(title, detail);
-            warning.append(icon, message);
-            applications.append(warning);
-          } else if (!route.applications.length) {
-            const empty = document.createElement("div");
-            empty.className = "route-empty";
-            empty.textContent = "○  Ninguna aplicación conectada";
-            applications.append(empty);
-          } else {
-            for (const application of route.applications) {
-              const item = document.createElement("div");
-              item.className = "application";
-              item.title = "Aplicación conectada a este cable";
-              const dot = document.createElement("span");
-              dot.className = "application-dot";
-              dot.setAttribute("aria-hidden", "true");
-              const name = document.createElement("span");
-              name.textContent = application.name;
-              item.append(dot, name);
-              applications.append(item);
-            }
+      renderRoutes(state);
+      renderPipelines(state);
+      renderAudioRecording(state);
+    }
+
+    function renderAudioRecording(state) {
+      const recording = state.audio_recording || {};
+      const panel = document.querySelector("#audio-recording");
+      const button = document.querySelector("#recording-button");
+      panel.hidden = !recording.enabled;
+      if (!recording.enabled) return;
+      panel.classList.toggle("active", Boolean(recording.active));
+      const automatic = (recording.automatic_pipelines || []).length > 0;
+      document.querySelector("#recording-status").textContent = recording.manual
+        ? t("recordingManual")
+        : automatic
+          ? t("recordingAutomatic")
+          : t("recordingReady");
+      button.hidden = automatic && !recording.manual;
+      button.textContent = recording.manual ? t("stopRecording") : t("startRecording");
+      button.dataset.active = String(!recording.manual);
+      button.disabled = false;
+    }
+
+    function renderRoutes(state) {
+      if (!state.virtual_cables) return;
+      for (const field of document.querySelectorAll(".route-field")) {
+        const routeName = field.dataset.cableRoute;
+        const route = state.virtual_cables[routeName];
+        const pipelineName = routeName === "remote_input" ? "remote_to_agent" : "agent_to_remote";
+        const translationActive = state.pipelines[pipelineName]?.status === "translation_ready";
+        const applications = field.querySelector(".application-list");
+        applications.replaceChildren();
+        if (route.unavailable || (translationActive && !route.applications.length)) {
+          const warning = document.createElement("div");
+          warning.className = "route-warning";
+          const icon = document.createElement("span");
+          icon.setAttribute("aria-hidden", "true");
+          icon.textContent = "⚠️";
+          const message = document.createElement("span");
+          const title = document.createElement("strong");
+          title.textContent = route.unavailable ? t("cableUnavailable") : t("callApplicationDisconnected");
+          const detail = document.createElement("span");
+          detail.textContent = route.unavailable ? t("checkVbCable") : routeName === "remote_input" ? t("selectCableA") : t("selectCableB");
+          message.append(title, detail);
+          warning.append(icon, message);
+          applications.append(warning);
+        } else if (!route.applications.length) {
+          const empty = document.createElement("div");
+          empty.className = "route-empty";
+          empty.textContent = `○ ${t("noConnectedApp")}`;
+          applications.append(empty);
+        } else {
+          for (const application of route.applications) {
+            const item = document.createElement("div");
+            item.className = "application";
+            item.title = t("appConnected");
+            const dot = document.createElement("span");
+            dot.className = "application-dot";
+            dot.setAttribute("aria-hidden", "true");
+            const name = document.createElement("span");
+            name.textContent = application.name;
+            item.append(dot, name);
+            applications.append(item);
           }
         }
       }
+    }
+
+    function renderPipelines(state) {
       for (const [name, pipeline] of Object.entries(state.pipelines)) {
         const card = document.querySelector(`[data-pipeline="${name}"]`);
         if (!card) continue;
@@ -326,10 +465,8 @@
         choice.hidden = !controlsReady;
         gate.hidden = controlsReady || !pipeline.running;
         gate.classList.toggle("failed", failed);
-        gate.querySelector("span:last-child").textContent = failed
-          ? "No se pudo preparar la traducción. El audio original sigue activo."
-          : "Cargando el sistema… El audio original ya está activo.";
-        card.querySelector("strong").textContent = pipeline.running ? (statusLabels[pipeline.status] || labels[pipeline.mode]) : "Audio no iniciado";
+        gate.querySelector("span:last-child").textContent = failed ? t("translationFailedDetail") : t("loadingOriginal");
+        card.querySelector("strong").textContent = pipeline.running ? (t("statusLabels")[pipeline.status] || t("labels")[pipeline.mode]) : t("audioNotStarted");
         for (const button of card.querySelectorAll("button")) {
           button.classList.toggle("active", button.dataset.mode === pipeline.mode);
           button.disabled = !controlsReady;
@@ -341,42 +478,104 @@
       const list = document.querySelector("#transcription-list");
       const empty = document.querySelector("#transcription-empty");
       const entries = state.transcription?.entries || [];
+      const paragraphs = buildTranscriptParagraphs(entries);
       list.replaceChildren();
       empty.hidden = entries.length > 0;
-      const languageLabels = Object.fromEntries(state.supported_languages.map(item => [item.code, item.label]));
-      for (const entry of entries) {
+      for (const [index, paragraph] of paragraphs.entries()) {
+        const remoteTurn = paragraph.pipeline === "remote_to_agent";
         const article = document.createElement("article");
-        article.className = "transcript-entry";
+        article.className = `transcript-entry ${remoteTurn ? "remote-turn" : "agent-turn"}`;
+        const speaker = document.createElement("div");
+        speaker.className = "transcript-speaker";
+        speaker.textContent = remoteTurn ? t("remoteSpeaker") : t("agentSpeaker");
         const source = document.createElement("div");
         source.className = "source-block";
         const sourceLabel = document.createElement("div");
         sourceLabel.className = "transcript-label";
-        sourceLabel.textContent = `Has dicho · ${languageLabels[entry.source_language] || entry.source_language}`;
+        sourceLabel.textContent = `${t(remoteTurn ? "remoteSaid" : "agentSaid")} - ${t("languages")[paragraph.source_language] || paragraph.source_language}`;
         const sourceText = document.createElement("p");
         sourceText.className = "transcript-text";
-        sourceText.textContent = entry.source_text;
-        source.append(sourceLabel, sourceText);
+        sourceText.textContent = paragraph.source_text;
+        const sourceMeta = document.createElement("div");
+        sourceMeta.className = "transcript-meta";
+        sourceMeta.textContent = `${t("paragraphMeta")} ${index + 1} - ${paragraph.count} ${t("segmentsMeta")}`;
+        source.append(sourceLabel, sourceText, sourceMeta);
         const translated = document.createElement("div");
         translated.className = "translated-block";
         const targetLabel = document.createElement("div");
         targetLabel.className = "transcript-label";
-        targetLabel.textContent = `El cliente escucha · ${languageLabels[entry.target_language] || entry.target_language}`;
+        targetLabel.textContent = `${t(remoteTurn ? "agentHears" : "remoteHears")} - ${t("languages")[paragraph.target_language] || paragraph.target_language}`;
         const targetText = document.createElement("p");
         targetText.className = "transcript-text";
-        if (entry.translation_status === "complete") {
-          targetText.textContent = entry.translated_text;
-        } else if (entry.translation_status === "unavailable") {
-          targetText.textContent = "No llegó a traducirse.";
+        if (paragraph.translation_status === "complete") {
+          targetText.textContent = paragraph.translated_text;
+        } else if (paragraph.translation_status === "unavailable") {
+          targetText.textContent = t("notTranslated");
           targetText.classList.add("translation-pending");
         } else {
-          targetText.textContent = "Traduciendo…";
+          targetText.textContent = paragraph.translated_text ? `${paragraph.translated_text} ${t("translating")}` : t("translating");
           targetText.classList.add("translation-pending");
         }
         translated.append(targetLabel, targetText);
-        article.append(source, translated);
+        article.append(speaker, source, translated);
         list.append(article);
       }
       if (entries.length) list.scrollTop = list.scrollHeight;
+    }
+
+    function buildTranscriptParagraphs(entries) {
+      const paragraphs = [];
+      let current = null;
+      const softSegmentLimit = 5;
+      const hardSegmentLimit = 8;
+      for (const entry of entries) {
+        const previousSource = current?.sourceParts.at(-1) || "";
+        const canExceedSoftLimit = current
+          && current.count >= softSegmentLimit
+          && !endsAtSentenceBoundary(previousSource);
+        const canAppend = current
+          && current.pipeline === entry.pipeline
+          && current.source_language === entry.source_language
+          && current.target_language === entry.target_language
+          && current.count < hardSegmentLimit
+          && (current.count < softSegmentLimit || canExceedSoftLimit)
+          && current.translation_status !== "unavailable"
+          && entry.translation_status !== "unavailable";
+        if (!canAppend) {
+          current = {
+            pipeline: entry.pipeline,
+            source_language: entry.source_language,
+            target_language: entry.target_language,
+            sourceParts: [],
+            translatedParts: [],
+            translation_status: "complete",
+            count: 0
+          };
+          paragraphs.push(current);
+        }
+        current.sourceParts.push(entry.source_text);
+        if (entry.translation_status === "complete" && entry.translated_text) {
+          current.translatedParts.push(entry.translated_text);
+        } else if (entry.translation_status === "pending") {
+          current.translation_status = "pending";
+        } else if (entry.translation_status === "unavailable") {
+          current.translation_status = "unavailable";
+        }
+        current.count += 1;
+      }
+      return paragraphs.map(paragraph => ({
+        pipeline: paragraph.pipeline,
+        source_language: paragraph.source_language,
+        target_language: paragraph.target_language,
+        source_text: paragraph.sourceParts.join(" "),
+        translated_text: paragraph.translatedParts.join(" "),
+        translation_status: paragraph.translation_status,
+        count: paragraph.count
+      }));
+    }
+
+    function endsAtSentenceBoundary(text) {
+      return /[.!?;:…]["'”’)]*$/.test(text.trim());
     }
 
     function setTab(panelId) {
@@ -394,7 +593,7 @@
       try {
         const response = await fetch("/api/transcription", { method: "DELETE" });
         const state = await response.json();
-        if (!response.ok) throw new Error(state.error || "No se pudo limpiar la transcripción.");
+        if (!response.ok) throw new Error(state.error || t("clearFailed"));
         render(state);
       } catch (error) {
         errorBox.textContent = error.message;
@@ -412,12 +611,26 @@
           method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ language })
         });
         const state = await response.json();
-        if (!response.ok) throw new Error(state.error || "No se pudo cambiar el idioma.");
+        if (!response.ok) throw new Error(state.error || t("languageFailed"));
         render(state);
       } catch (error) {
         errorBox.textContent = error.message;
       } finally {
         select.disabled = false;
+      }
+    }
+
+    async function setUiLanguage(language) {
+      errorBox.textContent = "";
+      try {
+        const response = await fetch("/api/ui-language", {
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ language })
+        });
+        const state = await response.json();
+        if (!response.ok) throw new Error(state.error || t("uiLanguageFailed"));
+        render(state);
+      } catch (error) {
+        errorBox.textContent = error.message;
       }
     }
 
@@ -430,12 +643,31 @@
           method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ gender })
         });
         const state = await response.json();
-        if (!response.ok) throw new Error(state.error || "No se pudo cambiar la voz.");
+        if (!response.ok) throw new Error(state.error || t("voiceFailed"));
         render(state);
       } catch (error) {
         errorBox.textContent = error.message;
       } finally {
         radios.forEach(radio => radio.disabled = false);
+      }
+    }
+
+    async function setAudioDevice(direction, selection) {
+      errorBox.textContent = "";
+      const select = document.querySelector(`select[data-audio-direction="${direction}"]`);
+      select.disabled = true;
+      try {
+        const response = await fetch(`/api/audio-devices/${direction}`, {
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selection })
+        });
+        const state = await response.json();
+        if (!response.ok) throw new Error(state.error || t("deviceFailed"));
+        render(state);
+      } catch (error) {
+        errorBox.textContent = error.message;
+        if (currentState) render(currentState);
+      } finally {
+        select.disabled = false;
       }
     }
 
@@ -449,7 +681,7 @@
           method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode })
         });
         const state = await response.json();
-        if (!response.ok) throw new Error(state.error || "No se pudo cambiar el modo.");
+        if (!response.ok) throw new Error(state.error || t("modeFailed"));
         render(state);
         completed = true;
       } catch (error) {
@@ -459,11 +691,34 @@
       }
     }
 
+    async function setAudioRecording(active) {
+      errorBox.textContent = "";
+      const button = document.querySelector("#recording-button");
+      button.disabled = true;
+      try {
+        const response = await fetch("/api/audio-recording", {
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ active })
+        });
+        const state = await response.json();
+        if (!response.ok) throw new Error(state.error || t("recordingFailed"));
+        render(state);
+      } catch (error) {
+        errorBox.textContent = error.message;
+        button.disabled = false;
+      }
+    }
+
     document.querySelectorAll(".card").forEach(card => {
       card.querySelectorAll("button").forEach(button => button.addEventListener("click", () => setMode(card.dataset.pipeline, button.dataset.mode)));
     });
     document.querySelectorAll("select[data-role]").forEach(select => {
       select.addEventListener("change", () => setLanguage(select.dataset.role, select.value));
+    });
+    document.querySelectorAll("select[data-audio-direction]").forEach(select => {
+      select.addEventListener("change", () => setAudioDevice(select.dataset.audioDirection, select.value));
+    });
+    document.querySelectorAll("[data-ui-language]").forEach(button => {
+      button.addEventListener("click", () => setUiLanguage(button.dataset.uiLanguage));
     });
     document.querySelectorAll('input[name="voice-gender"]').forEach(radio => {
       radio.addEventListener("change", () => {
@@ -474,11 +729,20 @@
       tab.addEventListener("click", () => setTab(tab.dataset.tab));
     });
     document.querySelector("#clear-transcription").addEventListener("click", clearTranscription);
-    fetch("/api/state").then(response => response.json()).then(render).catch(error => errorBox.textContent = error.message);
+    document.querySelector("#recording-button").addEventListener("click", event => {
+      setAudioRecording(event.currentTarget.dataset.active === "true");
+    });
+    fetch("/api/state")
+      .then(response => response.json())
+      .then(state => {
+        render(state);
+        setConnectionState(true);
+      })
+      .catch(error => errorBox.textContent = error.message);
     const events = new EventSource("/api/events");
-    events.onopen = () => { connection.classList.add("connected"); connection.querySelector("span:last-child").textContent = "Conectado"; };
+    events.onopen = () => setConnectionState(true);
     events.onmessage = event => render(JSON.parse(event.data));
-    events.onerror = () => { connection.classList.remove("connected"); connection.querySelector("span:last-child").textContent = "Reconectando…"; };
+    events.onerror = () => setConnectionState(false);
   </script>
 </body>
 </html>

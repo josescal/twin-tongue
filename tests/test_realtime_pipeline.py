@@ -12,7 +12,7 @@ from pipelines.remote_to_agent import (
 from app_state import ApplicationState, PipelineMode
 from audio.voice_detection import VoiceDetectorLoader
 from providers.factory import ProviderFactory
-from providers.stt import RealtimeTranscript
+from providers.stt import RealtimeTranscript, RealtimeTranscriptWord
 from providers.translate import TranslationResult
 from providers.tts import TTSChunk
 
@@ -38,15 +38,52 @@ def _synthesis(created_at: float) -> TimedSynthesis:
 
 
 class RealtimePipelineTests(unittest.TestCase):
+    def test_recording_is_automatic_for_translation_and_manual_for_passthrough(self) -> None:
+        pipeline = _pipeline()
+        pipeline._audio_recording_enabled = True
+        pipeline.control_state = ApplicationState(audio_recording_enabled=True)
+
+        self.assertFalse(pipeline._should_record_audio())
+        asyncio.run(
+            pipeline.control_state.set_mode("remote_to_agent", "translate")
+        )
+        self.assertTrue(pipeline._should_record_audio())
+        asyncio.run(
+            pipeline.control_state.set_mode("remote_to_agent", "passthrough")
+        )
+        asyncio.run(pipeline.control_state.set_manual_audio_recording(True))
+        self.assertTrue(pipeline._should_record_audio())
+
     def test_transcribed_text_is_logged_only_at_debug(self) -> None:
         pipeline = _pipeline()
-        pipeline.config = {"languages": {"remote": "en", "agent": "es"}}
+        pipeline.control_state = ApplicationState(
+            initial_modes={"remote_to_agent": "translate"},
+            initial_languages={"remote": "en", "agent": "es"},
+        )
 
         with patch("pipelines.remote_to_agent.logger") as pipeline_logger:
-            pipeline._handle_final(RealtimeTranscript(text="private transcript"))
+            pipeline._handle_final(
+                RealtimeTranscript(
+                    text="private transcript",
+                    words=(
+                        RealtimeTranscriptWord("private", logprob=-0.1),
+                        RealtimeTranscriptWord("transcript", logprob=-0.3),
+                    ),
+                )
+            )
 
         pipeline_logger.debug.assert_called_once_with(
-            "event=stt_final text=%s",
+            "event=stt_final pipeline=%s source_language=%s target_language=%s "
+            "commit_to_final_ms=%s boundary=%s word_count=%s "
+            "average_logprob=%s minimum_logprob=%s text=%s",
+            "remote_to_agent",
+            "en",
+            "es",
+            "",
+            "unknown",
+            2,
+            "-0.2000",
+            "-0.3000",
             "private transcript",
         )
         pipeline_logger.info.assert_not_called()
@@ -56,17 +93,34 @@ class RealtimePipelineTests(unittest.TestCase):
         pipeline.pipeline_name = "agent_to_remote"
         pipeline.source_language_name = "agent"
         pipeline.target_language_name = "remote"
-        pipeline.config = {"languages": {"agent": "es", "remote": "en"}}
         pipeline.control_state = ApplicationState(
-            initial_modes={"agent_to_remote": "translate"}
+            initial_modes={"agent_to_remote": "translate"},
+            initial_languages={"agent": "es", "remote": "en"},
         )
 
         pipeline._handle_final(RealtimeTranscript(text="Necesito explicarlo mejor"))
 
         entries = pipeline.control_state.snapshot()["transcription"]["entries"]
         self.assertEqual(1, len(entries))
+        self.assertEqual("agent_to_remote", entries[0]["pipeline"])
         self.assertEqual("Necesito explicarlo mejor", entries[0]["source_text"])
         self.assertIsNone(entries[0]["translated_text"])
+
+    def test_remote_final_is_published_to_live_transcription(self) -> None:
+        pipeline = _pipeline()
+        pipeline.control_state = ApplicationState(
+            initial_modes={"remote_to_agent": "translate"},
+            initial_languages={"remote": "en", "agent": "es"},
+        )
+
+        pipeline._handle_final(RealtimeTranscript(text="I need help"))
+
+        entries = pipeline.control_state.snapshot()["transcription"]["entries"]
+        self.assertEqual(1, len(entries))
+        self.assertEqual("remote_to_agent", entries[0]["pipeline"])
+        self.assertEqual("I need help", entries[0]["source_text"])
+        self.assertEqual("en", entries[0]["source_language"])
+        self.assertEqual("es", entries[0]["target_language"])
 
     def test_agent_translation_is_attached_to_its_final_transcript(self) -> None:
         pipeline = _pipeline()
@@ -74,7 +128,9 @@ class RealtimePipelineTests(unittest.TestCase):
         pipeline.control_state = ApplicationState(
             initial_modes={"agent_to_remote": "translate"}
         )
-        pipeline.control_state.publish_agent_final(7, "Hola", "es", "en")
+        pipeline.control_state.publish_transcript_final(
+            "agent_to_remote", 7, "Hola", "es", "en"
+        )
         pipeline.latency_protection_enabled = False
         pipeline.transcript_queue.put_nowait(
             TimedTranscript(
@@ -106,6 +162,11 @@ class RealtimePipelineTests(unittest.TestCase):
 
     def test_streaming_playback_writes_audio_before_final_marker(self) -> None:
         pipeline = _pipeline()
+        pipeline.control_state = ApplicationState(
+            initial_modes={"remote_to_agent": "translate"},
+            barge_in_enabled=False,
+            barge_in_resume_delay_ms=300,
+        )
         chunks: asyncio.Queue[TTSChunk | None] = asyncio.Queue()
         chunks.put_nowait(
             TTSChunk(
@@ -137,48 +198,39 @@ class RealtimePipelineTests(unittest.TestCase):
         chunks.put_nowait(None)
         item = TimedSynthesis(chunks=chunks, created_at=0, enqueued_at=0)
 
-        class FakeOutputStream:
-            def __init__(self, **kwargs: object) -> None:
+        class FakeQueuedOutput:
+            started = True
+            queue_capacity_blocks = 10
+            buffered_blocks = 0
+            output_underflows = 0
+
+            def __init__(self) -> None:
                 self.writes: list[bytes] = []
-                self.started = False
-                self.stopped = False
-                self.closed = False
 
-            def start(self) -> None:
-                self.started = True
-
-            def write(self, block: bytes) -> bool:
+            def push_block(self, block: bytes) -> None:
                 self.writes.append(block)
-                return False
 
-            def stop(self) -> None:
-                self.stopped = True
-
-            def close(self) -> None:
-                self.closed = True
-
-        stream = FakeOutputStream()
-        with patch(
-            "pipelines.remote_to_agent.sd.RawOutputStream",
-            return_value=stream,
-        ):
-            asyncio.run(
-                pipeline._play_synthesis_stream(
-                    item,
-                    output_device=0,
-                    output_channels=1,
-                    output_sample_rate=16_000,
-                    resampling_config={"backend": "soxr", "quality": "HQ"},
-                    frame_duration_ms=20,
-                )
+        output = FakeQueuedOutput()
+        pipeline._live_output = output  # type: ignore[assignment]
+        asyncio.run(
+            pipeline._play_synthesis_stream(
+                item,
+                output_device=0,
+                output_channels=1,
+                output_sample_rate=16_000,
+                resampling_config={"backend": "soxr", "quality": "HQ"},
+                frame_duration_ms=20,
             )
+        )
 
-        self.assertTrue(stream.started)
-        self.assertTrue(stream.stopped)
-        self.assertTrue(stream.closed)
-        self.assertEqual(640, sum(map(len, stream.writes)))
+        self.assertEqual(640, sum(map(len, output.writes)))
         self.assertEqual(1, pipeline.statistics.played_segments)
         self.assertEqual(640, pipeline.statistics.played_pcm_bytes)
+        self.assertTrue(
+            pipeline.control_state.is_capture_suppressed_by_barge_in(
+                "agent_to_remote"
+            )
+        )
 
     def test_translation_remains_passthrough_until_voice_detector_is_ready(self) -> None:
         pipeline = _pipeline()

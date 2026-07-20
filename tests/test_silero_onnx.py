@@ -72,7 +72,10 @@ class SileroOnnxModelTests(unittest.TestCase):
     def test_iterator_matches_silero_boundary_policy(self) -> None:
         model = ScoreModel([0.8, 0.2, 0.2, 0.2])
         iterator = SileroVadIterator(
-            model, threshold=0.5, min_silence_duration_ms=64
+            model,
+            threshold=0.5,
+            negative_threshold=0.35,
+            min_silence_duration_ms=64,
         )
         window = np.zeros(WINDOW_SAMPLES, dtype=np.float32)
 

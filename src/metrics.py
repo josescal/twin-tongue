@@ -13,6 +13,18 @@ METRIC_FIELDS = (
     "capture_blocks",
     "capture_dropped_blocks",
     "capture_overflows",
+    "capture_invalid_blocks",
+    "capture_maximum_buffered_blocks",
+    "capture_maximum_callback_gap_ms",
+    "passthrough_output_dropped_blocks",
+    "passthrough_output_underflows",
+    "passthrough_output_empty_buffer_events",
+    "passthrough_output_invalid_blocks",
+    "passthrough_output_maximum_buffered_blocks",
+    "passthrough_output_maximum_callback_gap_ms",
+    "translated_output_underflows",
+    "recording_dropped_blocks",
+    "event_loop_maximum_lag_ms",
     "final_transcripts",
     "translations",
     "syntheses",
@@ -58,12 +70,32 @@ class CsvMetricsWriter:
             if self._last_cleanup_date != day:
                 self._remove_expired_files(day)
                 self._last_cleanup_date = day
+            self._ensure_current_header(daily_path)
             write_header = not daily_path.exists() or daily_path.stat().st_size == 0
             with daily_path.open("a", newline="", encoding="utf-8") as output:
                 writer = csv.DictWriter(output, fieldnames=METRIC_FIELDS)
                 if write_header:
                     writer.writeheader()
                 writer.writerow(row)
+
+    def _ensure_current_header(self, path: Path) -> None:
+        """Upgrade an existing daily file when diagnostic fields are added."""
+        if not path.exists() or path.stat().st_size == 0:
+            return
+        with path.open(newline="", encoding="utf-8") as source:
+            reader = csv.DictReader(source)
+            if tuple(reader.fieldnames or ()) == METRIC_FIELDS:
+                return
+            rows = list(reader)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        with temporary.open("w", newline="", encoding="utf-8") as output:
+            writer = csv.DictWriter(output, fieldnames=METRIC_FIELDS)
+            writer.writeheader()
+            for existing in rows:
+                writer.writerow(
+                    {field: existing.get(field, "") for field in METRIC_FIELDS}
+                )
+        temporary.replace(path)
 
     def _daily_path(self, day: date) -> Path:
         suffix = self.path.suffix or ".csv"

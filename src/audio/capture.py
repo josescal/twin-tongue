@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import logging
 import math
 from threading import RLock
+import time
 
 import sounddevice as sd
 
@@ -33,6 +34,8 @@ class QueuedAudioInputStatistics:
     input_overflows: int = 0
     captured_pcm_bytes: int = 0
     invalid_block_sizes: int = 0
+    maximum_buffered_blocks: int = 0
+    maximum_callback_gap_ms: float = 0
 
 
 class QueuedAudioInput:
@@ -64,6 +67,7 @@ class QueuedAudioInput:
         self.input_device: int | None = None
         self.stream: sd.RawInputStream | None = None
         self._stream_lock = RLock()
+        self._last_callback_at: float | None = None
 
     def start(self) -> None:
         """Resolve, validate, and start the raw input stream."""
@@ -72,6 +76,7 @@ class QueuedAudioInput:
                 raise RuntimeError("Queued audio capture is already started.")
             self._blocks = PcmBlockBuffer(self.queue_capacity_blocks, self.block_bytes)
             self.statistics = QueuedAudioInputStatistics()
+            self._last_callback_at = None
             self.input_device = resolve_device(self.input_device_reference, "input")
             self._open_stream()
 
@@ -139,9 +144,20 @@ class QueuedAudioInput:
     ) -> None:
         self.statistics.captured_blocks += 1
         self.statistics.captured_pcm_bytes += len(indata)  # type: ignore[arg-type]
+        callback_at = time.perf_counter()
+        if self._last_callback_at is not None:
+            self.statistics.maximum_callback_gap_ms = max(
+                self.statistics.maximum_callback_gap_ms,
+                (callback_at - self._last_callback_at) * 1000,
+            )
+        self._last_callback_at = callback_at
         if status.input_overflow:
             self.statistics.input_overflows += 1
         result = self._blocks.write(indata)
+        self.statistics.maximum_buffered_blocks = max(
+            self.statistics.maximum_buffered_blocks,
+            len(self._blocks),
+        )
         if result != WRITE_STORED:
             self.statistics.dropped_blocks += 1
         if result == WRITE_INVALID_SIZE:

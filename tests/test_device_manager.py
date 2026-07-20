@@ -70,13 +70,62 @@ class AudioDeviceManagerPhysicalSelectionTests(unittest.IsolatedAsyncioTestCase)
         self.assertEqual(13, self.manager.active_index("input"))
         self.assertEqual(14, self.manager.active_index("output"))
 
-    async def test_only_voice_gender_is_persisted_and_survives_restart(self) -> None:
+    async def test_preferences_are_persisted_and_survive_restart(self) -> None:
         self.manager.set_voice_gender("female")
+        self.manager.set_ui_language("es")
+        self.manager.set_participant_language("remote", "fr")
         saved = json.loads(self.preference_path.read_text(encoding="utf-8"))
-        self.assertEqual({"voice_gender": "female"}, saved)
+        self.assertEqual("female", saved["voice_gender"])
+        self.assertEqual("es", saved["ui_language"])
+        self.assertEqual({"agent": "es", "remote": "fr"}, saved["languages"])
 
         restarted = AudioDeviceManager(self.preference_path, 60)
         self.assertEqual("female", restarted.voice_gender)
+        self.assertEqual("es", restarted.ui_language)
+        self.assertEqual({"agent": "es", "remote": "fr"}, restarted.participant_languages)
+
+    async def test_manual_devices_are_persisted_and_restored_by_stable_id(self) -> None:
+        available = [
+            device("mic-integrated", "Integrated microphone", 7, default=True),
+            device("mic-headset", "Headset microphone", 11),
+            device("speaker-integrated", "Computer speakers", 8, "output", True),
+            device("speaker-headset", "Headset headphones", 12, "output"),
+        ]
+        await self.refresh_with(available)
+
+        await self.manager.set_physical_device("input", "mic-headset")
+        await self.manager.set_physical_device("output", "speaker-headset")
+
+        self.assertEqual(11, self.manager.active_index("input"))
+        self.assertEqual(12, self.manager.active_index("output"))
+        saved = json.loads(self.preference_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            {"mode": "manual", "stable_id": "mic-headset", "name": "Headset microphone"},
+            saved["input"],
+        )
+        restarted = AudioDeviceManager(self.preference_path, 60)
+        with patch(
+            "audio.device_manager.discover_audio_topology",
+            return_value=(available, []),
+        ):
+            await restarted.refresh(force_sessions=True)
+        self.assertEqual(11, restarted.active_index("input"))
+        await restarted.close()
+
+    async def test_automatic_selection_can_be_restored(self) -> None:
+        await self.refresh_with([
+            device("mic-integrated", "Integrated microphone", 7, default=True),
+            device("mic-headset", "Headset microphone", 11),
+        ])
+        await self.manager.set_physical_device("input", "mic-headset")
+
+        await self.manager.set_physical_device("input", "automatic")
+
+        self.assertEqual(7, self.manager.active_index("input"))
+        snapshot = self.manager.snapshot()["audio_devices"]["input"]
+        self.assertEqual("automatic", snapshot["selection"])
+        saved = json.loads(self.preference_path.read_text(encoding="utf-8"))
+        self.assertEqual("automatic", saved["input"]["mode"])
 
     async def test_legacy_preferences_use_the_configured_voice_default(self) -> None:
         self.preference_path.write_text(
@@ -93,7 +142,9 @@ class AudioDeviceManagerPhysicalSelectionTests(unittest.IsolatedAsyncioTestCase)
 
         self.assertEqual("female", manager.voice_gender)
         saved = json.loads(self.preference_path.read_text(encoding="utf-8"))
-        self.assertEqual({"voice_gender": "female"}, saved)
+        self.assertEqual("female", saved["voice_gender"])
+        self.assertEqual("en", saved["ui_language"])
+        self.assertEqual({"agent": "es", "remote": "en"}, saved["languages"])
 
     async def test_application_sessions_are_refreshed_less_often_than_topology(self) -> None:
         with patch(

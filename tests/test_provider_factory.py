@@ -26,7 +26,10 @@ def _config() -> dict[str, object]:
             "model": "scribe_v2_realtime",
             "audio_format": "pcm_16000",
             "sample_rate": 16_000,
-            "include_timestamps": False,
+            "include_timestamps": True,
+            "no_verbatim": True,
+            "keyterms": ["Twin Tongue"],
+            "send_chunk_duration_ms": 100,
         },
         "translation": {
             "endpoint": "https://translation.googleapis.com/language/translate/v2",
@@ -80,6 +83,9 @@ class ProviderFactoryTests(unittest.TestCase):
 
         self.assertIsInstance(stt, ElevenLabsRealtimeSTT)
         self.assertEqual("en", stt.language)
+        self.assertTrue(stt.no_verbatim)
+        self.assertEqual(["Twin Tongue"], stt.keyterms)
+        self.assertEqual(100, stt.send_chunk_duration_ms)
         self.assertIsInstance(translator, GoogleTranslateBasicV2)
         self.assertIsInstance(tts, ElevenLabsTTS)
         self.assertEqual("spanish-female", tts.language_voices["es"]["female"])

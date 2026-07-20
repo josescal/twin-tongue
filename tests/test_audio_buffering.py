@@ -7,6 +7,17 @@ from audio.buffering import PcmBlockBuffer
 
 
 class PcmBlockBufferTests(unittest.TestCase):
+    def test_clear_discards_only_ready_blocks(self) -> None:
+        buffer = PcmBlockBuffer(capacity=3, block_bytes=2)
+        buffer.write(b"aa")
+        buffer.write(b"bb")
+
+        self.assertEqual(buffer.clear(), 2)
+        self.assertEqual(len(buffer), 0)
+        self.assertIsNone(buffer.pop_bytes())
+        self.assertEqual(buffer.write(b"cc"), 0)
+        self.assertEqual(buffer.pop_bytes(), b"cc")
+
     def test_concurrent_handoff_finishes_without_deadlock_or_corruption(self) -> None:
         buffer = PcmBlockBuffer(capacity=32, block_bytes=4)
         producer_done = Event()

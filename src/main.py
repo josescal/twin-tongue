@@ -59,27 +59,35 @@ def parse_args() -> argparse.Namespace:
 async def run_application(args: argparse.Namespace) -> None:
     """Load configuration and run the selected pipeline directions."""
     config = load_config(PROJECT_ROOT / "config" / "default.toml")
+    _resolve_runtime_paths(config)
     logging_settings = config["logging"]
     assert isinstance(logging_settings, dict)
-    configured_log_path = Path(str(logging_settings["log_file"]))
-    if not configured_log_path.is_absolute():
-        configured_log_path = PROJECT_ROOT / configured_log_path
+    configured_log_path: Path | None = None
+    if bool(logging_settings.get("file_enabled", True)):
+        configured_log_path = Path(str(logging_settings["log_file"]))
+        if not configured_log_path.is_absolute():
+            configured_log_path = PROJECT_ROOT / configured_log_path
     configure_logging(
         str(logging_settings["level"]),
         log_path=configured_log_path,
         log_size_mb=float(logging_settings["log_size_mb"]),
         log_max_files=int(logging_settings["log_max_files"]),
         log_queue_capacity=int(logging_settings["log_queue_capacity"]),
+        file_flush_interval_seconds=float(
+            logging_settings.get("file_flush_interval_seconds", 2.0)
+        ),
     )
-    configured_metrics_path = Path(
-        str(logging_settings.get("metrics_file", "logs/metrics.csv"))
-    )
-    if not configured_metrics_path.is_absolute():
-        configured_metrics_path = PROJECT_ROOT / configured_metrics_path
-    metrics_writer = CsvMetricsWriter(
-        configured_metrics_path,
-        retention_days=int(logging_settings.get("metrics_retention_days", 14)),
-    )
+    metrics_writer: CsvMetricsWriter | None = None
+    if bool(logging_settings.get("metrics_enabled", True)):
+        configured_metrics_path = Path(
+            str(logging_settings.get("metrics_file", "logs/metrics.csv"))
+        )
+        if not configured_metrics_path.is_absolute():
+            configured_metrics_path = PROJECT_ROOT / configured_metrics_path
+        metrics_writer = CsvMetricsWriter(
+            configured_metrics_path,
+            retention_days=int(logging_settings.get("metrics_retention_days", 14)),
+        )
     if args.duration < 0:
         raise ConfigurationError("Duration must not be negative.")
     duration = None if args.duration == 0 else args.duration
@@ -101,13 +109,20 @@ async def run_application(args: argparse.Namespace) -> None:
         if not bool(settings["enabled"]):
             raise ConfigurationError(f"pipelines.{name} must be enabled.")
     audio_settings = config["audio"]
+    stt_settings = config["stt"]
     assert isinstance(audio_settings, dict)
+    assert isinstance(stt_settings, dict)
+    audio_capture_settings = stt_settings["audio_capture"]
+    assert isinstance(audio_capture_settings, dict)
+    barge_in_settings = agent_settings["barge_in"]
+    assert isinstance(barge_in_settings, dict)
     device_manager = AudioDeviceManager(
         PROJECT_ROOT / "config" / "audio-device-preferences.json",
         poll_interval_seconds=float(
-            audio_settings.get("device_poll_interval_seconds", 1.5)
+            audio_settings.get("device_poll_interval_seconds", 5.0)
         ),
         default_voice_gender=str(config["tts"]["voice_gender"]),
+        default_ui_language="en",
     )
     try:
         control_state = ApplicationState(
@@ -116,11 +131,15 @@ async def run_application(args: argparse.Namespace) -> None:
                 "agent_to_remote": str(agent_settings["mode"]),
             },
             initial_languages={
-                "agent": str(config["languages"]["agent"]),
-                "remote": str(config["languages"]["remote"]),
+                "agent": device_manager.participant_languages["agent"],
+                "remote": device_manager.participant_languages["remote"],
             },
             initial_voice_gender=device_manager.voice_gender,
+            initial_ui_language=device_manager.ui_language,
+            audio_recording_enabled=bool(audio_capture_settings["enabled"]),
             active_pipelines=selected_names,
+            barge_in_enabled=bool(barge_in_settings["enabled"]),
+            barge_in_resume_delay_ms=float(barge_in_settings["resume_delay_ms"]),
         )
     except ValueError as error:
         raise ConfigurationError(str(error)) from error
@@ -268,6 +287,17 @@ def main() -> int:
     finally:
         shutdown_logging()
     return 0
+
+
+def _resolve_runtime_paths(config: dict[str, object]) -> None:
+    """Resolve relative runtime output paths against the application root."""
+    stt_settings = config["stt"]
+    assert isinstance(stt_settings, dict)
+    audio_capture = stt_settings["audio_capture"]
+    assert isinstance(audio_capture, dict)
+    capture_directory = Path(str(audio_capture["directory"]))
+    if not capture_directory.is_absolute():
+        audio_capture["directory"] = str(PROJECT_ROOT / capture_directory)
 
 
 if __name__ == "__main__":

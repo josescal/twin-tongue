@@ -1,5 +1,6 @@
 """Google Cloud Translation Basic v2 REST provider."""
 
+import asyncio
 from html import unescape
 import logging
 import time
@@ -17,6 +18,7 @@ from providers.translate import (
     TranslationServiceError,
     TranslationStatistics,
 )
+from providers.retry import ProviderRetryPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,7 @@ class GoogleTranslateBasicV2:
         text_format: str = "text",
         timeout_seconds: float = 15,
         transport: httpx.AsyncBaseTransport | None = None,
+        retry_policy: ProviderRetryPolicy | None = None,
     ) -> None:
         if not api_key.strip():
             raise TranslationConfigurationError("GOOGLE_TRANSLATE_API_KEY is missing or empty.")
@@ -46,6 +49,7 @@ class GoogleTranslateBasicV2:
         self.text_format = text_format
         self.timeout_seconds = timeout_seconds
         self._transport = transport
+        self.retry_policy = retry_policy or ProviderRetryPolicy()
         self._client: httpx.AsyncClient | None = None
         self._statistics = TranslationStatistics()
 
@@ -88,25 +92,40 @@ class GoogleTranslateBasicV2:
         self._statistics.requests += 1
         self._statistics.source_characters += len(source_text)
         started_at = time.monotonic()
-        try:
-            response = await self._client.post(
-                self.endpoint,
-                json={
-                    "q": [source_text],
-                    "source": source_language,
-                    "target": target_language,
-                    "format": self.text_format,
-                },
+        response: httpx.Response | None = None
+        for attempt in range(1, self.retry_policy.max_attempts + 1):
+            try:
+                response = await self._client.post(
+                    self.endpoint,
+                    json={
+                        "q": [source_text],
+                        "source": source_language,
+                        "target": target_language,
+                        "format": self.text_format,
+                    },
+                )
+                if response.status_code < 400:
+                    break
+                error = self._http_error(response.status_code)
+            except (httpx.TimeoutException, httpx.TransportError) as exception:
+                error = TranslationNetworkError(
+                    "Google Cloud Translation Basic v2 could not be reached."
+                )
+                error.__cause__ = exception
+            if not isinstance(error, TranslationNetworkError) or attempt == self.retry_policy.max_attempts:
+                self._statistics.failed_translations += 1
+                raise error
+            delay = self.retry_policy.delay_seconds(attempt)
+            logger.warning(
+                "event=provider_request_retry provider=google_translate_v2 attempt=%s "
+                "next_attempt=%s delay_seconds=%.2f error=%s",
+                attempt,
+                attempt + 1,
+                delay,
+                error,
             )
-        except (httpx.TimeoutException, httpx.TransportError) as error:
-            self._statistics.failed_translations += 1
-            raise TranslationNetworkError(
-                "Google Cloud Translation Basic v2 could not be reached."
-            ) from error
-
-        if response.status_code >= 400:
-            self._statistics.failed_translations += 1
-            raise self._http_error(response.status_code)
+            await asyncio.sleep(delay)
+        assert response is not None and response.status_code < 400
 
         try:
             payload = response.json()

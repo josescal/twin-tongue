@@ -96,6 +96,7 @@ class SileroVoiceDetectionBackend:
         *,
         input_rate: int,
         threshold: float,
+        negative_threshold: float,
         min_silence_duration_ms: float,
         runtime: str = "onnx",
         opset_version: int = 16,
@@ -120,6 +121,7 @@ class SileroVoiceDetectionBackend:
         self._iterator = SileroVadIterator(
             model,
             threshold=threshold,
+            negative_threshold=negative_threshold,
             min_silence_duration_ms=min_silence_duration_ms,
         )
         iterator_initialization_ms = (time.perf_counter() - iterator_started) * 1000
@@ -156,6 +158,7 @@ class SileroVoiceDetectionBackend:
             active=bool(self._iterator.triggered),
             started=started,
             ended=ended,
+            score=self._iterator.last_score,
             silence_duration_ms=(
                 tentative_silence_samples * 1000 / self.sample_rate
             ),
@@ -178,6 +181,7 @@ def _create_silero(
     return SileroVoiceDetectionBackend(
         input_rate=input_rate,
         threshold=float(pipeline_settings["threshold"]),
+        negative_threshold=float(pipeline_settings["negative_threshold"]),
         min_silence_duration_ms=float(
             pipeline_settings["min_silence_duration_ms"]
         ),
@@ -218,18 +222,26 @@ class StreamingVoiceDetector:
         backend: VoiceDetectionBackend,
         *,
         frame_duration_ms: float,
-        preroll_ms: float,
+        speech_pad_ms: float,
+        min_speech_duration_ms: float = 0.0,
     ) -> None:
         if frame_duration_ms <= 0:
             raise ValueError("Voice detection frame duration must be greater than zero.")
-        if preroll_ms < 0:
-            raise ValueError("Voice detection pre-roll must not be negative.")
+        if speech_pad_ms < 0:
+            raise ValueError("Voice detection speech_pad_ms must not be negative.")
+        if min_speech_duration_ms < 0:
+            raise ValueError(
+                "Voice detection min_speech_duration_ms must not be negative."
+            )
         self.backend = backend
         self.frame_duration_ms = frame_duration_ms
-        self.preroll_blocks = max(1, math.ceil(preroll_ms / frame_duration_ms))
+        self.preroll_blocks = max(1, math.ceil(speech_pad_ms / frame_duration_ms))
+        self.min_speech_duration_ms = min_speech_duration_ms
         self.statistics = VoiceDetectionStatistics()
         self.active = False
         self._preroll: deque[bytes] = deque(maxlen=self.preroll_blocks)
+        self._candidate_blocks: list[bytes] = []
+        self._candidate_speech_duration_ms = 0.0
 
     def process(self, mono_pcm: bytes) -> VoiceDetectionResult:
         """Detect and return the PCM blocks that should be sent to STT."""
@@ -244,18 +256,39 @@ class StreamingVoiceDetector:
                 event.score, peak if peak is not None else event.score
             )
 
-        speech_started = event.started and not self.active
+        speech_started = event.started and not self.active and not self._candidate_blocks
         speech_ended = False
         if not self.active:
-            self._preroll.append(mono_pcm)
-            if not speech_started:
+            if not self._candidate_blocks:
+                self._preroll.append(mono_pcm)
+            if speech_started:
+                self._candidate_blocks.extend(self._preroll)
+                self._preroll.clear()
+                self._candidate_speech_duration_ms = self.frame_duration_ms
+            elif self._candidate_blocks:
+                self._candidate_blocks.append(mono_pcm)
+                if event.silence_duration_ms <= 0:
+                    self._candidate_speech_duration_ms += self.frame_duration_ms
+
+            if self._candidate_blocks and event.ended:
+                self._discard_candidate()
                 return VoiceDetectionResult(
                     (), False, False, False, event.silence_duration_ms
                 )
+
+            if (
+                not self._candidate_blocks
+                or self._candidate_speech_duration_ms < self.min_speech_duration_ms
+            ):
+                return VoiceDetectionResult(
+                    (), False, False, False, event.silence_duration_ms
+                )
+
             self.active = True
             self.statistics.activations += 1
-            blocks = tuple(self._preroll)
-            self._preroll.clear()
+            blocks = tuple(self._candidate_blocks)
+            self._candidate_blocks.clear()
+            self._candidate_speech_duration_ms = 0.0
             return VoiceDetectionResult(
                 blocks, True, False, True, event.silence_duration_ms
             )
@@ -277,7 +310,12 @@ class StreamingVoiceDetector:
         """Clear transient state while preserving aggregate statistics."""
         self.active = False
         self._preroll.clear()
+        self._discard_candidate()
         self.backend.reset()
+
+    def _discard_candidate(self) -> None:
+        self._candidate_blocks.clear()
+        self._candidate_speech_duration_ms = 0.0
 
 
 def create_voice_detector(
@@ -299,7 +337,8 @@ def create_voice_detector(
     return StreamingVoiceDetector(
         backend,
         frame_duration_ms=frame_duration_ms,
-        preroll_ms=float(pipeline_settings["preroll_ms"]),
+        speech_pad_ms=float(pipeline_settings["speech_pad_ms"]),
+        min_speech_duration_ms=float(pipeline_settings["min_speech_duration_ms"]),
     )
 
 
@@ -370,8 +409,10 @@ def validate_voice_detection_settings(
         return
     numeric = (
         "threshold",
+        "negative_threshold",
+        "min_speech_duration_ms",
         "min_silence_duration_ms",
-        "preroll_ms",
+        "speech_pad_ms",
     )
     for key in numeric:
         value = pipeline_settings.get(key)
@@ -380,6 +421,15 @@ def validate_voice_detection_settings(
     threshold = float(pipeline_settings["threshold"])
     if not 0 <= threshold <= 1:
         raise ValueError("Voice detection threshold must be between 0 and 1.")
-    for key in ("min_silence_duration_ms", "preroll_ms"):
+    negative_threshold = float(pipeline_settings["negative_threshold"])
+    if not 0 <= negative_threshold <= 1:
+        raise ValueError("Voice detection negative_threshold must be between 0 and 1.")
+    if negative_threshold >= threshold:
+        raise ValueError("Voice detection negative_threshold must be lower than threshold.")
+    for key in (
+        "min_speech_duration_ms",
+        "min_silence_duration_ms",
+        "speech_pad_ms",
+    ):
         if float(pipeline_settings[key]) < 0:
             raise ValueError(f"Voice detection {key} must not be negative.")

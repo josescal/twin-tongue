@@ -47,6 +47,26 @@ class CsvMetricsWriterTests(unittest.TestCase):
             self.assertTrue(retained.exists())
             self.assertTrue(unrelated.exists())
 
+    def test_upgrades_existing_daily_header_when_fields_are_added(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "metrics.csv"
+            daily_path = path.with_name(f"metrics-{date.today().isoformat()}.csv")
+            daily_path.write_text(
+                "timestamp,pipeline,capture_blocks\n"
+                "2026-01-01T00:00:00+00:00,agent_to_remote,10\n",
+                encoding="utf-8",
+            )
+
+            CsvMetricsWriter(path).write(
+                {"pipeline": "remote_to_agent", "event_loop_maximum_lag_ms": 12}
+            )
+
+            with daily_path.open(newline="", encoding="utf-8") as source:
+                rows = list(csv.DictReader(source))
+            self.assertEqual(2, len(rows))
+            self.assertEqual("10", rows[0]["capture_blocks"])
+            self.assertEqual("12", rows[1]["event_loop_maximum_lag_ms"])
+
     def test_rejects_unbounded_or_zero_retention(self) -> None:
         with self.assertRaises(ValueError):
             CsvMetricsWriter("metrics.csv", retention_days=0)

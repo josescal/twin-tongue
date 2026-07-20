@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from enum import StrEnum
+import time
 from typing import AsyncIterator, Literal, TypeAlias, cast
 
 from audio.device_manager import AudioDeviceManager
@@ -11,6 +12,7 @@ from twin_tongue_version import __version__
 
 PipelineName: TypeAlias = Literal["remote_to_agent", "agent_to_remote"]
 LanguageRole: TypeAlias = Literal["agent", "remote"]
+UiLanguage: TypeAlias = Literal["en", "es"]
 
 PIPELINE_NAMES: tuple[PipelineName, ...] = (
     "remote_to_agent",
@@ -18,11 +20,12 @@ PIPELINE_NAMES: tuple[PipelineName, ...] = (
 )
 LANGUAGE_ROLES: tuple[LanguageRole, ...] = ("agent", "remote")
 SUPPORTED_LANGUAGES = {
-    "en": "Inglés",
-    "es": "Español",
-    "fr": "Francés",
-    "ca": "Catalán",
+    "en": "English",
+    "es": "Spanish",
+    "fr": "French",
+    "ca": "Catalan",
 }
+SUPPORTED_UI_LANGUAGES: tuple[UiLanguage, ...] = ("en", "es")
 TRANSCRIPTION_HISTORY_LIMIT = 50
 
 
@@ -61,7 +64,11 @@ class ApplicationState:
         initial_modes: dict[str, str] | None = None,
         initial_languages: dict[str, str] | None = None,
         initial_voice_gender: str = VoiceGender.MALE,
+        initial_ui_language: str = "en",
+        audio_recording_enabled: bool = False,
         active_pipelines: tuple[str, ...] = PIPELINE_NAMES,
+        barge_in_enabled: bool = True,
+        barge_in_resume_delay_ms: float = 300,
     ) -> None:
         requested_modes = initial_modes or {}
         self._modes: dict[PipelineName, PipelineMode] = {
@@ -85,16 +92,30 @@ class ApplicationState:
                 raise ValueError(f"Unsupported language '{language}' for {role}")
             self._languages[role] = language
         self._voice_gender = VoiceGender(initial_voice_gender)
-        self._agent_transcripts: list[dict[str, object]] = []
+        self._ui_language = self._parse_ui_language(initial_ui_language)
+        self._audio_recording_enabled = bool(audio_recording_enabled)
+        self._manual_audio_recording = False
+        if barge_in_resume_delay_ms < 0:
+            raise ValueError("Barge-in resume delay must not be negative.")
+        self._barge_in_enabled = bool(barge_in_enabled)
+        self._barge_in_resume_delay_seconds = barge_in_resume_delay_ms / 1000
+        self._translated_playback_until: dict[PipelineName, float] = {
+            name: 0.0 for name in PIPELINE_NAMES
+        }
+        self._transcripts: list[dict[str, object]] = []
         self._revision = 0
         self._lock = asyncio.Lock()
         self._subscribers: set[asyncio.Queue[dict[str, object]]] = set()
         self._device_manager: AudioDeviceManager | None = None
 
     def attach_device_manager(self, manager: AudioDeviceManager) -> None:
-        """Expose physical devices and virtual routes through realtime state."""
+        """Expose physical devices, virtual routes, and persisted preferences."""
         self._device_manager = manager
         self._voice_gender = VoiceGender(manager.voice_gender)
+        self._ui_language = self._parse_ui_language(manager.ui_language)
+        for role, language in manager.participant_languages.items():
+            if role in LANGUAGE_ROLES and language in SUPPORTED_LANGUAGES:
+                self._languages[cast(LanguageRole, role)] = language
         manager.set_change_callback(self._publish_external_change)
 
     def get_mode(self, name: str) -> PipelineMode:
@@ -107,14 +128,27 @@ class ApplicationState:
         result: dict[str, object] = {
             "application_version": __version__,
             "revision": self._revision,
+            "ui_language": self._ui_language,
+            "supported_ui_languages": list(SUPPORTED_UI_LANGUAGES),
             "languages": dict(self._languages),
             "supported_languages": [
                 {"code": code, "label": label}
                 for code, label in SUPPORTED_LANGUAGES.items()
             ],
             "voice_gender": self._voice_gender.value,
+            "audio_recording": {
+                "enabled": self._audio_recording_enabled,
+                "active": self.is_audio_recording_active(),
+                "manual": self._manual_audio_recording,
+                "automatic_pipelines": list(self._automatic_recording_pipelines()),
+            },
+            "barge_in": {
+                "enabled": self._barge_in_enabled,
+                "pipeline": "agent_to_remote",
+                "resume_delay_ms": self._barge_in_resume_delay_seconds * 1000,
+            },
             "transcription": {
-                "entries": [dict(entry) for entry in self._agent_transcripts],
+                "entries": [dict(entry) for entry in self._transcripts],
             },
             "pipelines": {
                 name: {
@@ -150,7 +184,24 @@ class ApplicationState:
         async with self._lock:
             if self._languages[parsed_role] == language:
                 return self.snapshot()
+            if self._device_manager is not None:
+                self._device_manager.set_participant_language(parsed_role, language)
             self._languages[parsed_role] = language
+            return self._publish_change()
+
+    def get_ui_language(self) -> UiLanguage:
+        """Return the current interface language."""
+        return self._ui_language
+
+    async def set_ui_language(self, language: str) -> dict[str, object]:
+        """Change the interface language and notify realtime subscribers."""
+        parsed_language = self._parse_ui_language(language)
+        async with self._lock:
+            if self._ui_language == parsed_language:
+                return self.snapshot()
+            if self._device_manager is not None:
+                self._device_manager.set_ui_language(parsed_language)
+            self._ui_language = parsed_language
             return self._publish_change()
 
     def get_voice_gender(self) -> VoiceGender:
@@ -176,17 +227,90 @@ class ApplicationState:
             self._voice_gender = parsed_gender
             return self._publish_change()
 
-    def publish_agent_final(
+    async def set_audio_device(
+        self, direction: str, selection: str
+    ) -> dict[str, object]:
+        """Select a physical input/output endpoint and notify the live UI."""
+        if direction not in {"input", "output"}:
+            raise ValueError(f"Unknown physical audio direction '{direction}'.")
+        if self._device_manager is None:
+            raise ValueError("Audio device management is not available.")
+        async with self._lock:
+            changed = await self._device_manager.set_physical_device(
+                cast(Literal["input", "output"], direction), selection
+            )
+            return self._publish_change() if changed else self.snapshot()
+
+    def is_audio_recording_active(self) -> bool:
+        """Return whether any active pipeline is being recorded."""
+        return self._audio_recording_enabled and (
+            self._manual_audio_recording
+            or bool(self._automatic_recording_pipelines())
+        )
+
+    def is_audio_recording_active_for(self, name: str) -> bool:
+        """Return whether one pipeline should write diagnostic audio."""
+        parsed_name = self._parse_pipeline_name(name)
+        return self._audio_recording_enabled and parsed_name in self._active_pipelines and (
+            self._manual_audio_recording
+            or self._modes[parsed_name] is PipelineMode.TRANSLATE
+        )
+
+    async def set_manual_audio_recording(self, active: bool) -> dict[str, object]:
+        """Start or stop user-requested recording without persisting it."""
+        if active and not self._audio_recording_enabled:
+            raise ValueError("Audio recording is disabled in configuration.")
+        async with self._lock:
+            if self._manual_audio_recording is active:
+                return self.snapshot()
+            self._manual_audio_recording = active
+            return self._publish_change()
+
+    def note_translated_playback(
         self,
+        name: str,
+        buffered_audio_ms: float,
+        *,
+        now: float | None = None,
+    ) -> None:
+        """Extend the interval that blocks barge-in from the opposite microphone."""
+        parsed_name = self._parse_pipeline_name(name)
+        if self._barge_in_enabled:
+            return
+        if buffered_audio_ms < 0:
+            raise ValueError("Buffered translated playback must not be negative.")
+        current_time = time.monotonic() if now is None else now
+        blocked_until = current_time + (
+            buffered_audio_ms / 1000 + self._barge_in_resume_delay_seconds
+        )
+        self._translated_playback_until[parsed_name] = max(
+            self._translated_playback_until[parsed_name], blocked_until
+        )
+
+    def is_capture_suppressed_by_barge_in(
+        self, name: str, *, now: float | None = None
+    ) -> bool:
+        """Return whether opposite translated playback currently owns the turn."""
+        parsed_name = self._parse_pipeline_name(name)
+        if self._barge_in_enabled or parsed_name != "agent_to_remote":
+            return False
+        current_time = time.monotonic() if now is None else now
+        return current_time < self._translated_playback_until["remote_to_agent"]
+
+    def publish_transcript_final(
+        self,
+        pipeline_name: str,
         transcript_id: int,
         text: str,
         source_language: str,
         target_language: str,
     ) -> None:
-        """Append one committed agent utterance to the bounded live history."""
-        self._agent_transcripts.append(
+        """Append one committed utterance from either conversation direction."""
+        parsed_pipeline_name = self._parse_pipeline_name(pipeline_name)
+        self._transcripts.append(
             {
                 "id": transcript_id,
+                "pipeline": parsed_pipeline_name,
                 "source_text": text,
                 "translated_text": None,
                 "translation_status": "pending",
@@ -194,36 +318,46 @@ class ApplicationState:
                 "target_language": target_language,
             }
         )
-        del self._agent_transcripts[:-TRANSCRIPTION_HISTORY_LIMIT]
+        del self._transcripts[:-TRANSCRIPTION_HISTORY_LIMIT]
         self._publish_change()
 
-    def publish_agent_translation(self, transcript_id: int, text: str) -> None:
-        """Attach the client-facing translation to its committed utterance."""
-        for index, entry in enumerate(self._agent_transcripts):
-            if entry["id"] == transcript_id:
+    def publish_transcript_translation(
+        self, pipeline_name: str, transcript_id: int, text: str
+    ) -> None:
+        """Attach translated text to its utterance and conversation direction."""
+        parsed_pipeline_name = self._parse_pipeline_name(pipeline_name)
+        for index, entry in enumerate(self._transcripts):
+            if entry["pipeline"] == parsed_pipeline_name and entry["id"] == transcript_id:
                 updated = dict(entry)
                 updated["translated_text"] = text
                 updated["translation_status"] = "complete"
-                self._agent_transcripts[index] = updated
+                self._transcripts[index] = updated
                 self._publish_change()
                 return
 
-    def mark_agent_translation_unavailable(self, transcript_id: int) -> None:
+    def mark_transcript_translation_unavailable(
+        self, pipeline_name: str, transcript_id: int
+    ) -> None:
         """Mark a final segment that will not reach translated synthesis."""
-        for index, entry in enumerate(self._agent_transcripts):
-            if entry["id"] == transcript_id and entry["translation_status"] == "pending":
+        parsed_pipeline_name = self._parse_pipeline_name(pipeline_name)
+        for index, entry in enumerate(self._transcripts):
+            if (
+                entry["pipeline"] == parsed_pipeline_name
+                and entry["id"] == transcript_id
+                and entry["translation_status"] == "pending"
+            ):
                 updated = dict(entry)
                 updated["translation_status"] = "unavailable"
-                self._agent_transcripts[index] = updated
+                self._transcripts[index] = updated
                 self._publish_change()
                 return
 
-    async def clear_agent_transcription(self) -> dict[str, object]:
-        """Clear committed transcription text from live memory."""
+    async def clear_transcription(self) -> dict[str, object]:
+        """Clear committed transcription text for both conversation directions."""
         async with self._lock:
-            if not self._agent_transcripts:
+            if not self._transcripts:
                 return self.snapshot()
-            self._agent_transcripts.clear()
+            self._transcripts.clear()
             return self._publish_change()
 
     async def set_mode(self, name: str, mode: str | PipelineMode) -> dict[str, object]:
@@ -276,6 +410,16 @@ class ApplicationState:
                     pass
             queue.put_nowait(snapshot)
 
+    def _automatic_recording_pipelines(self) -> tuple[PipelineName, ...]:
+        if not self._audio_recording_enabled:
+            return ()
+        return tuple(
+            name
+            for name in PIPELINE_NAMES
+            if name in self._active_pipelines
+            and self._modes[name] is PipelineMode.TRANSLATE
+        )
+
     @asynccontextmanager
     async def subscribe(self) -> AsyncIterator[asyncio.Queue[dict[str, object]]]:
         """Subscribe to state changes with a bounded queue."""
@@ -297,3 +441,9 @@ class ApplicationState:
         if role not in LANGUAGE_ROLES:
             raise ValueError(f"Unknown language role '{role}'")
         return cast(LanguageRole, role)
+
+    @staticmethod
+    def _parse_ui_language(language: str) -> UiLanguage:
+        if language not in SUPPORTED_UI_LANGUAGES:
+            raise ValueError("Unsupported UI language; expected one of: en, es")
+        return cast(UiLanguage, language)

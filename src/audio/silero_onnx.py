@@ -85,10 +85,12 @@ class SileroVadIterator:
         model: SileroOnnxModel,
         *,
         threshold: float,
+        negative_threshold: float,
         min_silence_duration_ms: float,
     ) -> None:
         self.model = model
         self.threshold = threshold
+        self.negative_threshold = negative_threshold
         self.min_silence_samples = SAMPLE_RATE * min_silence_duration_ms / 1000
         self.reset_states()
 
@@ -97,11 +99,13 @@ class SileroVadIterator:
         self.triggered = False
         self.temp_end = 0
         self.current_sample = 0
+        self.last_score: float | None = None
 
     def process(self, samples: np.ndarray) -> dict[str, int] | None:
         window_samples = int(np.asarray(samples).size)
         self.current_sample += window_samples
         speech_probability = self.model.infer(samples)
+        self.last_score = speech_probability
 
         if speech_probability >= self.threshold and self.temp_end:
             self.temp_end = 0
@@ -110,7 +114,7 @@ class SileroVadIterator:
             self.triggered = True
             return {"start": max(0, self.current_sample - window_samples)}
 
-        if speech_probability < self.threshold - 0.15 and self.triggered:
+        if speech_probability < self.negative_threshold and self.triggered:
             if not self.temp_end:
                 self.temp_end = self.current_sample
             if self.current_sample - self.temp_end < self.min_silence_samples:
