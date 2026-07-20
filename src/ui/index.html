@@ -8,7 +8,7 @@
     :root { color-scheme: light; font-family: Inter, system-ui, sans-serif; background: #f7f8fa; color: #172033; }
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; background: #f7f8fa; }
-    main { width: min(820px, calc(100% - 28px)); margin: 0 auto; padding: 16px 0; }
+    main { width: min(1200px, calc(100% - 28px)); margin: 0 auto; padding: 16px 0; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
     h1 { margin: 0; font-size: clamp(1.4rem, 3vw, 1.7rem); }
     h2 { margin: 0 0 10px; font-size: .95rem; font-weight: 700; }
@@ -26,11 +26,13 @@
     .connection { display: flex; align-items: center; gap: 7px; color: #697386; font-size: .82rem; }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: #e5a12d; }
     .connected .dot { background: #25a765; }
+    .offline-notice { margin-bottom: 10px; padding: 10px 12px; border: 1px solid #f1c27d; border-radius: 9px; background: #fff7e8; color: #7c2d12; font-size: .8rem; font-weight: 650; }
     .tabs { display: flex; gap: 4px; margin-bottom: 10px; padding: 3px; border-radius: 10px; background: #e9ecf1; }
     .tabs button { flex: 1; }
     .tab-panel:focus { outline: none; }
-    .grid, .languages, .voice-recording-row, .audio-devices, .routing-grid, .help-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-    .languages, .audio-devices { margin-bottom: 8px; }
+    .control-layout { display: grid; grid-template-columns: minmax(0, 1fr) 260px; align-items: start; gap: 12px; }
+    .usage-column { display: grid; gap: 10px; min-width: 0; }
+    .grid, .languages, .routing-grid, .help-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
     .language-field, .device-field, .card, .virtual-routing, .help-card, .transcription-panel { border: 1px solid #e3e6eb; border-radius: 10px; background: #fff; }
     .language-field, .device-field { display: grid; gap: 5px; padding: 10px 12px; }
     .language-field label { color: #606a7c; font-size: .78rem; font-weight: 650; }
@@ -38,21 +40,31 @@
     .device-status { min-height: 1.2em; color: #687386; font-size: .75rem; }
     .device-status.info { color: #687386; font-weight: 500; }
     .device-status.warning { color: #b54708; font-weight: 650; }
-    .voice-recording-row { margin-bottom: 8px; }
-    .voice-selector { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0; padding: 10px 12px; border: 1px solid #e3e6eb; border-radius: 10px; background: #fff; }
+    .translation-master { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 14px; border: 1px solid #bde8ce; border-radius: 10px; background: #f2fbf6; }
+    .translation-master h2 { margin-bottom: 3px; color: #12673d; }
+    .translation-master p { margin: 0; color: #596477; font-size: .76rem; line-height: 1.4; }
+    .all-translation-button { flex: 0 0 auto; min-width: 190px; padding: 10px 14px; background: #198754; color: #fff; box-shadow: 0 1px 3px #17203322; }
+    .all-translation-button:hover { background: #126f43; color: #fff; }
+    .all-translation-button[aria-pressed="true"] { background: #fff; color: #12673d; }
+    .settings-panel { display: grid; gap: 8px; padding: 11px; border: 1px solid #d9dde5; border-radius: 10px; background: #eef1f5; }
+    .settings-panel > h2 { margin: 0 0 1px; color: #596477; font-size: .78rem; text-transform: uppercase; letter-spacing: .07em; }
+    .settings-panel .device-field { padding: 8px 9px; }
+    .settings-panel .device-field label { font-size: .74rem; }
+    .settings-panel select { padding: 6px 7px; font-size: .75rem; }
+    .voice-selector { display: grid; gap: 7px; margin: 0; padding: 8px 9px; border: 1px solid #e3e6eb; border-radius: 9px; background: #fff; }
     .voice-selector legend { padding: 0; color: #606a7c; font-size: .78rem; font-weight: 650; }
-    .voice-options { display: flex; gap: 6px; }
-    .voice-option { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid #d9dde5; border-radius: 8px; color: #343d4e; font-size: .82rem; font-weight: 650; cursor: pointer; }
+    .voice-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; width: 100%; }
+    .voice-option { display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; padding: 5px 7px; border: 1px solid #d9dde5; border-radius: 7px; color: #343d4e; font-size: .75rem; font-weight: 650; cursor: pointer; }
     .voice-option:has(input:checked) { border-color: #8dd4aa; background: #e8f7ee; color: #12673d; }
     .voice-option input { margin: 0; accent-color: #198754; }
-    .audio-recording { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0; padding: 10px 12px; border: 1px solid #e3e6eb; border-radius: 10px; background: #fff; }
+    .audio-recording { display: grid; gap: 7px; margin: 0; padding: 8px 9px; border: 1px solid #e3e6eb; border-radius: 9px; background: #fff; }
     .recording-state { display: flex; align-items: center; gap: 9px; min-width: 0; }
     .recording-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: #aab2c0; }
     .audio-recording.active .recording-dot { background: #d92d20; box-shadow: 0 0 0 3px #fee4e2; }
     .recording-copy { display: grid; gap: 2px; }
-    .recording-copy strong { color: #343d4e; font-size: .82rem; }
-    .recording-copy span { color: #687386; font-size: .74rem; }
-    .recording-button { border: 1px solid #d9dde5; padding: 7px 10px; background: #f7f8fa; color: #343d4e; }
+    .recording-copy strong { color: #343d4e; font-size: .75rem; }
+    .recording-copy span { color: #687386; font-size: .68rem; }
+    .recording-button { width: 100%; border: 1px solid #d9dde5; padding: 6px 8px; background: #f7f8fa; color: #343d4e; font-size: .74rem; }
     .audio-recording.active .recording-button { border-color: #f4b4ae; color: #b42318; }
     .card { padding: 13px; }
     .choice { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border-radius: 9px; background: #f0f2f5; gap: 3px; }
@@ -61,9 +73,7 @@
     .spinner { width: 16px; height: 16px; flex: 0 0 auto; border: 2px solid #ccd2da; border-top-color: #25a765; border-radius: 50%; animation: spin .8s linear infinite; }
     .pipeline-gate.failed .spinner { display: none; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .mode { margin-top: 8px; display: flex; justify-content: space-between; gap: 10px; color: #7b8495; font-size: .76rem; }
-    .mode strong { color: #343d4e; }
-    .virtual-routing { margin-top: 8px; padding: 12px; }
+    .virtual-routing { padding: 12px; }
     .route-field { display: grid; align-content: start; gap: 8px; padding: 10px; border: 1px solid #e6e9ee; border-radius: 9px; background: #fafbfc; }
     .route-heading { display: flex; align-items: center; gap: 8px; }
     .route-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border-radius: 8px; background: #edf1f5; font-size: 1rem; }
@@ -112,7 +122,10 @@
     @media (max-width: 700px) {
       header { align-items: flex-start; }
       .header-actions { align-items: flex-end; flex-direction: column; }
-      .grid, .languages, .voice-recording-row, .audio-devices, .routing-grid, .transcript-entry, .help-grid { grid-template-columns: 1fr; }
+      .control-layout, .grid, .languages, .routing-grid, .transcript-entry, .help-grid { grid-template-columns: 1fr; }
+      .settings-panel { order: 2; }
+      .translation-master { align-items: stretch; flex-direction: column; }
+      .all-translation-button { width: 100%; min-width: 0; }
       .translated-block { border-top: 1px solid #e3e6eb; border-left: 0; }
       .voice-selector { align-items: flex-start; flex-direction: column; }
       main { padding-top: 14px; }
@@ -136,79 +149,85 @@
       <button id="transcription-tab" role="tab" aria-selected="false" aria-controls="transcription-panel" data-tab="transcription-panel" data-i18n="tabTranscription">Transcription</button>
       <button id="help-tab" role="tab" aria-selected="false" aria-controls="help-panel" data-tab="help-panel" data-i18n="tabHelp">Help</button>
     </nav>
+    <div id="offline-notice" class="offline-notice" data-i18n="processDisconnectedDetail" role="status" hidden>The Twin Tongue process is disconnected. Audio, translation, and recording are stopped.</div>
     <section id="control-panel" class="tab-panel" role="tabpanel" aria-labelledby="control-tab">
-      <section class="languages" aria-label="Conversation languages">
-        <div class="language-field">
-          <label for="remote-language" data-i18n="remoteLanguage">Other person's language</label>
-          <select id="remote-language" data-role="remote"></select>
-        </div>
-        <div class="language-field">
-          <label for="agent-language" data-i18n="agentLanguage">Your language</label>
-          <select id="agent-language" data-role="agent"></select>
-        </div>
-      </section>
-      <section class="voice-recording-row" aria-label="Translation voice and diagnostic recording">
-        <fieldset class="voice-selector">
-          <legend data-i18n="voiceLegend">Translated voice</legend>
-          <div class="voice-options">
-            <label class="voice-option"><input type="radio" name="voice-gender" value="male"> <span data-i18n="male">Male</span></label>
-            <label class="voice-option"><input type="radio" name="voice-gender" value="female"> <span data-i18n="female">Female</span></label>
-          </div>
-        </fieldset>
-        <section id="audio-recording" class="audio-recording" aria-live="polite" hidden>
-          <div class="recording-state">
-            <span class="recording-dot" aria-hidden="true"></span>
-            <div class="recording-copy">
-              <strong data-i18n="recordingTitle">Diagnostic recording</strong>
-              <span id="recording-status"></span>
+      <div class="control-layout">
+        <div class="usage-column">
+          <section class="languages" aria-label="Conversation languages">
+            <div class="language-field">
+              <label for="remote-language" data-i18n="remoteLanguage">Other person's language</label>
+              <select id="remote-language" data-role="remote"></select>
             </div>
-          </div>
-          <button id="recording-button" class="recording-button" type="button"></button>
-        </section>
-      </section>
-      <section class="audio-devices" aria-label="Agent microphone and listening device">
-        <div class="device-field">
-          <label for="agent-output-device" data-i18n="speakerLabel">Your speakers or headphones are:</label>
-          <select id="agent-output-device" class="device-select" data-audio-direction="output"></select>
-          <div class="device-status" aria-live="polite" hidden></div>
+            <div class="language-field">
+              <label for="agent-language" data-i18n="agentLanguage">Your language</label>
+              <select id="agent-language" data-role="agent"></select>
+            </div>
+          </section>
+          <section class="translation-master" aria-label="Two-way translation">
+            <div><h2 data-i18n="bothDirectionsTitle">Two-way translation</h2><p data-i18n="bothDirectionsHelp">Apply the same mode to both sides of the conversation.</p></div>
+            <button id="all-translation-button" class="all-translation-button" type="button" aria-pressed="false"></button>
+          </section>
+          <section class="grid">
+            <article class="card" data-pipeline="remote_to_agent">
+              <h2 data-i18n="remotePipelineTitle">Audio you hear</h2>
+              <div class="pipeline-gate" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span data-i18n="loadingOriginal">Loading system... Original audio is active.</span></div>
+              <div class="choice" hidden>
+                <button data-mode="translate" data-i18n="translated">Translated</button><button data-mode="passthrough" data-i18n="untranslated">Untranslated</button>
+              </div>
+            </article>
+            <article class="card" data-pipeline="agent_to_remote">
+              <h2 data-i18n="agentPipelineTitle">Audio the other person hears</h2>
+              <div class="pipeline-gate" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span data-i18n="loadingOriginal">Loading system... Original audio is active.</span></div>
+              <div class="choice" hidden>
+                <button data-mode="translate" data-i18n="translated">Translated</button><button data-mode="passthrough" data-i18n="untranslated">Untranslated</button>
+              </div>
+            </article>
+          </section>
+          <section class="virtual-routing" aria-label="VB-CABLE connections">
+            <h2 data-i18n="callConnections">Call connections</h2>
+            <div class="routing-grid">
+              <div class="route-field" data-cable-route="remote_input">
+                <div class="route-heading"><span class="route-icon" aria-hidden="true">🔊</span><div class="route-name"><span data-i18n="callSpeaker">Call speaker</span><span class="route-cable">CABLE A</span></div></div>
+                <div class="application-list" aria-live="polite"></div>
+              </div>
+              <div class="route-field" data-cable-route="translated_output">
+                <div class="route-heading"><span class="route-icon" aria-hidden="true">🎙️</span><div class="route-name"><span data-i18n="callMic">Call microphone</span><span class="route-cable">CABLE B</span></div></div>
+                <div class="application-list" aria-live="polite"></div>
+              </div>
+            </div>
+          </section>
         </div>
-        <div class="device-field">
-          <label for="agent-input-device" data-i18n="micLabel">Your microphone is:</label>
-          <select id="agent-input-device" class="device-select" data-audio-direction="input"></select>
-          <div class="device-status" aria-live="polite" hidden></div>
-        </div>
-      </section>
-      <section class="grid">
-        <article class="card" data-pipeline="remote_to_agent">
-          <h2 data-i18n="remotePipelineTitle">Audio you hear</h2>
-          <div class="pipeline-gate" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span data-i18n="loadingOriginal">Loading system... Original audio is active.</span></div>
-          <div class="choice" hidden>
-            <button data-mode="translate" data-i18n="translated">Translated</button><button data-mode="passthrough" data-i18n="untranslated">Untranslated</button>
+        <aside class="settings-panel" aria-label="Configuration options">
+          <h2 data-i18n="settingsTitle">Configuration</h2>
+          <fieldset class="voice-selector">
+            <legend data-i18n="voiceLegend">Translated voice</legend>
+            <div class="voice-options">
+              <label class="voice-option"><input type="radio" name="voice-gender" value="male"> <span data-i18n="male">Male</span></label>
+              <label class="voice-option"><input type="radio" name="voice-gender" value="female"> <span data-i18n="female">Female</span></label>
+            </div>
+          </fieldset>
+          <section id="audio-recording" class="audio-recording" aria-live="polite" hidden>
+            <div class="recording-state">
+              <span class="recording-dot" aria-hidden="true"></span>
+              <div class="recording-copy">
+                <strong data-i18n="recordingTitle">Diagnostic recording</strong>
+                <span id="recording-status"></span>
+              </div>
+            </div>
+            <button id="recording-button" class="recording-button" type="button"></button>
+          </section>
+          <div class="device-field">
+            <label for="agent-output-device" data-i18n="speakerLabel">Your speakers or headphones are:</label>
+            <select id="agent-output-device" class="device-select" data-audio-direction="output"></select>
+            <div class="device-status" aria-live="polite" hidden></div>
           </div>
-          <div class="mode"><span data-i18n="youHear">You currently hear</span><strong>-</strong></div>
-        </article>
-        <article class="card" data-pipeline="agent_to_remote">
-          <h2 data-i18n="agentPipelineTitle">Audio the other person hears</h2>
-          <div class="pipeline-gate" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span data-i18n="loadingOriginal">Loading system... Original audio is active.</span></div>
-          <div class="choice" hidden>
-            <button data-mode="translate" data-i18n="translated">Translated</button><button data-mode="passthrough" data-i18n="untranslated">Untranslated</button>
+          <div class="device-field">
+            <label for="agent-input-device" data-i18n="micLabel">Your microphone is:</label>
+            <select id="agent-input-device" class="device-select" data-audio-direction="input"></select>
+            <div class="device-status" aria-live="polite" hidden></div>
           </div>
-          <div class="mode"><span data-i18n="theyHear">They currently hear</span><strong>-</strong></div>
-        </article>
-      </section>
-      <section class="virtual-routing" aria-label="VB-CABLE connections">
-        <h2 data-i18n="callConnections">Call connections</h2>
-        <div class="routing-grid">
-          <div class="route-field" data-cable-route="remote_input">
-            <div class="route-heading"><span class="route-icon" aria-hidden="true">🔊</span><div class="route-name"><span data-i18n="callSpeaker">Call speaker</span><span class="route-cable">CABLE A</span></div></div>
-            <div class="application-list" aria-live="polite"></div>
-          </div>
-          <div class="route-field" data-cable-route="translated_output">
-            <div class="route-heading"><span class="route-icon" aria-hidden="true">🎙️</span><div class="route-name"><span data-i18n="callMic">Call microphone</span><span class="route-cable">CABLE B</span></div></div>
-            <div class="application-list" aria-live="polite"></div>
-          </div>
-        </div>
-      </section>
+        </aside>
+      </div>
     </section>
     <section id="transcription-panel" class="tab-panel transcription-panel" role="tabpanel" aria-labelledby="transcription-tab" hidden>
       <div class="transcription-heading">
@@ -267,12 +286,12 @@
   <script>
     const translations = {
       en: {
-        eyebrow: "Control panel", connecting: "Connecting...", connected: "Connected", reconnecting: "Reconnecting...",
+        eyebrow: "Control panel", connecting: "Connecting...", connected: "Connected", reconnecting: "Disconnected",
         tabControl: "Control", tabTranscription: "Transcription", tabHelp: "Help",
-        remoteLanguage: "Other person's language", agentLanguage: "Your language", voiceLegend: "Translated voice", male: "Male", female: "Female",
+        remoteLanguage: "Other person's language", agentLanguage: "Your language", settingsTitle: "Configuration", voiceLegend: "Translated voice", male: "Male", female: "Female",
         speakerLabel: "Your speakers or headphones are:", micLabel: "Your microphone is:",
         remotePipelineTitle: "Audio you hear", agentPipelineTitle: "Audio the other person hears", loadingOriginal: "Loading system... Original audio is active.",
-        translated: "Translated", untranslated: "Untranslated", youHear: "You currently hear", theyHear: "They currently hear",
+        translated: "Translated", untranslated: "Untranslated", bothDirectionsTitle: "Two-way translation", bothDirectionsHelp: "Apply the same mode to both sides of the conversation.", enableBothDirections: "Translate both ways", disableBothDirections: "Use original audio both ways",
         callConnections: "Call connections", callSpeaker: "Call speaker", callMic: "Call microphone",
         transcriptionTitle: "Conversation transcription", transcriptionDescription: "Recognized and translated phrases from both sides of the conversation.", clear: "Clear",
         emptyTranscription: "Phrases will appear here when translation is active and either person starts speaking.",
@@ -286,16 +305,16 @@
         labels: { translate: "translated audio", passthrough: "untranslated audio" },
         statusLabels: { starting: "Preparing audio...", system_loading: "Loading system - original audio active", switching: "Applying change...", initializing: "Preparing translation...", translation_unavailable: "Translation unavailable - original audio active", translation_ready: "Ready: you can start speaking", passthrough: "untranslated audio", error: "Audio setup error" },
         languages: { en: "English", es: "Spanish", fr: "French", ca: "Catalan" },
-        noDevice: "No audio device available", noAudioDevice: "No audio device is available", automaticDevice: "Automatic (Windows communications device)", defaultDevice: "default", savedDevicePending: "Using this device for now:", savedDeviceWillReturn: "Twin Tongue will restore your saved selection when Windows makes it available.", savedDeviceSelection: "saved selection", cableUnavailable: "Cable unavailable", callApplicationDisconnected: "No call application connected", checkVbCable: "Check the VB-CABLE installation.", selectCableA: "Select CABLE A as the speaker in the call application.", selectCableB: "Select CABLE B as the microphone in the call application.", noConnectedApp: "No connected application", appConnected: "Application connected to this cable",
+        noDevice: "No audio device available", noAudioDevice: "No audio device is available", automaticDevice: "Automatic (Windows communications device)", defaultDevice: "default", savedDeviceSelection: "saved selection", cableUnavailable: "Cable unavailable", callApplicationDisconnected: "No call application connected", checkVbCable: "Check the VB-CABLE installation.", selectCableA: "Select CABLE A as the speaker in the call application.", selectCableB: "Select CABLE B as the microphone in the call application.", noConnectedApp: "No connected application", appConnected: "Application connected to this cable", processDisconnectedDetail: "The Twin Tongue process is disconnected. Audio, translation, and recording are stopped.", recordingDisconnected: "Recording stopped: process disconnected.",
         audioNotStarted: "Audio not started", remoteSpeaker: "Other person", agentSpeaker: "You", remoteSaid: "Other person said", agentHears: "You hear", agentSaid: "You said", remoteHears: "Other person hears", paragraphMeta: "Paragraph", segmentsMeta: "segments", notTranslated: "It was not translated.", translating: "Translating...", clearFailed: "Could not clear transcription.", languageFailed: "Could not change the language.", uiLanguageFailed: "Could not change the interface language.", voiceFailed: "Could not change the voice.", deviceFailed: "Could not change the audio device.", modeFailed: "Could not change the mode.", translationFailedDetail: "Translation could not be prepared. Original audio remains active."
       },
       es: {
-        eyebrow: "Panel de control", connecting: "Conectando...", connected: "Conectado", reconnecting: "Reconectando...",
+        eyebrow: "Panel de control", connecting: "Conectando...", connected: "Conectado", reconnecting: "Sin conexión",
         tabControl: "Control", tabTranscription: "Transcripción", tabHelp: "Ayuda",
-        remoteLanguage: "Idioma de la otra persona", agentLanguage: "Tu idioma", voiceLegend: "Voz de la traducción", male: "Hombre", female: "Mujer",
+        remoteLanguage: "Idioma de la otra persona", agentLanguage: "Tu idioma", settingsTitle: "Configuración", voiceLegend: "Voz de la traducción", male: "Hombre", female: "Mujer",
         speakerLabel: "Tus altavoces o auriculares son:", micLabel: "Tu micrófono es:",
         remotePipelineTitle: "Audio que escuchas tú", agentPipelineTitle: "Audio que escucha la otra persona", loadingOriginal: "Cargando el sistema... El audio original está activo.",
-        translated: "Traducido", untranslated: "Sin traducir", youHear: "Ahora escuchas", theyHear: "Ahora escucha",
+        translated: "Traducido", untranslated: "Sin traducir", bothDirectionsTitle: "Traducción en ambos sentidos", bothDirectionsHelp: "Aplica el mismo modo a los dos sentidos de la conversación.", enableBothDirections: "Traducir en ambos sentidos", disableBothDirections: "Usar audio original en ambos sentidos",
         callConnections: "Conexiones de la llamada", callSpeaker: "Altavoz de la llamada", callMic: "Micrófono de la llamada",
         transcriptionTitle: "Transcripción de la conversación", transcriptionDescription: "Frases reconocidas y traducidas de los dos interlocutores.", clear: "Limpiar",
         emptyTranscription: "Las frases aparecerán aquí cuando la traducción esté activa y cualquiera de los dos empiece a hablar.",
@@ -309,7 +328,7 @@
         labels: { translate: "el audio traducido", passthrough: "el audio sin traducir" },
         statusLabels: { starting: "Preparando el audio...", system_loading: "Cargando el sistema - audio original activo", switching: "Aplicando el cambio...", initializing: "Preparando la traducción...", translation_unavailable: "Traducción no disponible - audio original activo", translation_ready: "Listo: puedes empezar a hablar", passthrough: "el audio sin traducir", error: "Error al preparar el audio" },
         languages: { en: "Inglés", es: "Español", fr: "Francés", ca: "Catalán" },
-        noDevice: "Ningún dispositivo disponible", noAudioDevice: "No hay ningún dispositivo de audio disponible", automaticDevice: "Automático (dispositivo de comunicaciones de Windows)", defaultDevice: "predeterminado", savedDevicePending: "Por ahora se está usando:", savedDeviceWillReturn: "Twin Tongue recuperará la selección guardada cuando Windows vuelva a mostrarla.", savedDeviceSelection: "selección guardada", cableUnavailable: "Cable no disponible", callApplicationDisconnected: "Ninguna aplicación de llamada conectada", checkVbCable: "Comprueba la instalación de VB-CABLE.", selectCableA: "Selecciona CABLE A como altavoz en la aplicación de llamada.", selectCableB: "Selecciona CABLE B como micrófono en la aplicación de llamada.", noConnectedApp: "Ninguna aplicación conectada", appConnected: "Aplicación conectada a este cable",
+        noDevice: "Ningún dispositivo disponible", noAudioDevice: "No hay ningún dispositivo de audio disponible", automaticDevice: "Automático (dispositivo de comunicaciones de Windows)", defaultDevice: "predeterminado", savedDeviceSelection: "selección guardada", cableUnavailable: "Cable no disponible", callApplicationDisconnected: "Ninguna aplicación de llamada conectada", checkVbCable: "Comprueba la instalación de VB-CABLE.", selectCableA: "Selecciona CABLE A como altavoz en la aplicación de llamada.", selectCableB: "Selecciona CABLE B como micrófono en la aplicación de llamada.", noConnectedApp: "Ninguna aplicación conectada", appConnected: "Aplicación conectada a este cable", processDisconnectedDetail: "El proceso de Twin Tongue está desconectado. El audio, la traducción y la grabación están detenidos.", recordingDisconnected: "Grabación detenida: proceso desconectado.",
         audioNotStarted: "Audio no iniciado", remoteSpeaker: "Otra persona", agentSpeaker: "Tú", remoteSaid: "La otra persona ha dicho", agentHears: "Tú escuchas", agentSaid: "Has dicho", remoteHears: "La otra persona escucha", paragraphMeta: "Párrafo", segmentsMeta: "segmentos", notTranslated: "No llegó a traducirse.", translating: "Traduciendo...", clearFailed: "No se pudo limpiar la transcripción.", languageFailed: "No se pudo cambiar el idioma.", uiLanguageFailed: "No se pudo cambiar el idioma de la interfaz.", voiceFailed: "No se pudo cambiar la voz.", deviceFailed: "No se pudo cambiar el dispositivo de audio.", modeFailed: "No se pudo cambiar el modo.", translationFailedDetail: "No se pudo preparar la traducción. El audio original sigue activo."
       }
     };
@@ -327,6 +346,34 @@
       connectionOnline = connected;
       connection.classList.toggle("connected", connected);
       connection.querySelector("span:last-child").textContent = connected ? t("connected") : t("reconnecting");
+      document.querySelector("#offline-notice").hidden = connected;
+      if (!connected && currentState) renderDisconnectedState();
+    }
+
+    function renderDisconnectedState() {
+      for (const card of document.querySelectorAll("[data-pipeline]")) {
+        card.querySelector(".choice").hidden = true;
+        const gate = card.querySelector(".pipeline-gate");
+        gate.hidden = false;
+        gate.classList.add("failed");
+        gate.querySelector("span:last-child").textContent = t("processDisconnectedDetail");
+      }
+      const masterButton = document.querySelector("#all-translation-button");
+      masterButton.disabled = true;
+      masterButton.setAttribute("aria-pressed", "false");
+      for (const control of document.querySelectorAll("#control-panel select, #control-panel input, #control-panel button")) {
+        control.disabled = true;
+      }
+      const recording = document.querySelector("#audio-recording");
+      recording.classList.remove("active");
+      document.querySelector("#recording-status").textContent = t("recordingDisconnected");
+      document.querySelector("#recording-button").hidden = true;
+      for (const applications of document.querySelectorAll(".application-list")) {
+        const unavailable = document.createElement("div");
+        unavailable.className = "route-empty";
+        unavailable.textContent = t("processDisconnectedDetail");
+        applications.replaceChildren(unavailable);
+      }
     }
 
     function applyTranslations() {
@@ -345,11 +392,11 @@
       currentState = state;
       uiLanguage = state.ui_language || "en";
       applyTranslations();
-      setConnectionState(connectionOnline);
       document.querySelector("#application-version").textContent = state.application_version || "-";
       renderTranscription(state);
       for (const radio of document.querySelectorAll('input[name="voice-gender"]')) {
         radio.checked = radio.value === state.voice_gender;
+        radio.disabled = false;
       }
       for (const select of document.querySelectorAll("select[data-role]")) {
         const selectedValue = state.languages[select.dataset.role];
@@ -358,6 +405,7 @@
           select.add(new Option(t("languages")[language.code] || language.label, language.code));
         }
         select.value = selectedValue;
+        select.disabled = false;
       }
       if (state.audio_devices) {
         for (const select of document.querySelectorAll("select[data-audio-direction]")) {
@@ -378,16 +426,16 @@
           if (!device.active_name) {
             status.textContent = t("noAudioDevice");
             status.classList.add("warning");
-          } else if (!device.preferred_available) {
-            status.textContent = `${t("savedDevicePending")} ${device.active_name}. ${t("savedDeviceWillReturn")}`;
-            status.classList.add("info");
           }
           status.hidden = !status.textContent;
+          select.disabled = false;
         }
       }
       renderRoutes(state);
       renderPipelines(state);
       renderAudioRecording(state);
+      document.querySelector("#clear-transcription").disabled = false;
+      setConnectionState(connectionOnline);
     }
 
     function renderAudioRecording(state) {
@@ -466,12 +514,20 @@
         gate.hidden = controlsReady || !pipeline.running;
         gate.classList.toggle("failed", failed);
         gate.querySelector("span:last-child").textContent = failed ? t("translationFailedDetail") : t("loadingOriginal");
-        card.querySelector("strong").textContent = pipeline.running ? (t("statusLabels")[pipeline.status] || t("labels")[pipeline.mode]) : t("audioNotStarted");
         for (const button of card.querySelectorAll("button")) {
           button.classList.toggle("active", button.dataset.mode === pipeline.mode);
           button.disabled = !controlsReady;
         }
       }
+      const masterButton = document.querySelector("#all-translation-button");
+      const runningPipelines = Object.values(state.pipelines).filter(pipeline => pipeline.running);
+      const bothRunning = runningPipelines.length === 2;
+      const bothTranslated = bothRunning && runningPipelines.every(pipeline => pipeline.mode === "translate");
+      const controlsReady = bothRunning && runningPipelines.every(pipeline => ["passthrough", "translation_ready"].includes(pipeline.status));
+      masterButton.dataset.mode = bothTranslated ? "passthrough" : "translate";
+      masterButton.textContent = bothTranslated ? t("disableBothDirections") : t("enableBothDirections");
+      masterButton.setAttribute("aria-pressed", String(bothTranslated));
+      masterButton.disabled = !controlsReady;
     }
 
     function renderTranscription(state) {
@@ -691,6 +747,23 @@
       }
     }
 
+    async function setAllModes(mode) {
+      errorBox.textContent = "";
+      const button = document.querySelector("#all-translation-button");
+      button.disabled = true;
+      try {
+        const response = await fetch("/api/pipelines", {
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode })
+        });
+        const state = await response.json();
+        if (!response.ok) throw new Error(state.error || t("modeFailed"));
+        render(state);
+      } catch (error) {
+        errorBox.textContent = error.message;
+        button.disabled = false;
+      }
+    }
+
     async function setAudioRecording(active) {
       errorBox.textContent = "";
       const button = document.querySelector("#recording-button");
@@ -710,6 +783,9 @@
 
     document.querySelectorAll(".card").forEach(card => {
       card.querySelectorAll("button").forEach(button => button.addEventListener("click", () => setMode(card.dataset.pipeline, button.dataset.mode)));
+    });
+    document.querySelector("#all-translation-button").addEventListener("click", event => {
+      setAllModes(event.currentTarget.dataset.mode);
     });
     document.querySelectorAll("select[data-role]").forEach(select => {
       select.addEventListener("change", () => setLanguage(select.dataset.role, select.value));
@@ -735,13 +811,18 @@
     fetch("/api/state")
       .then(response => response.json())
       .then(state => {
+        connectionOnline = true;
         render(state);
-        setConnectionState(true);
       })
-      .catch(error => errorBox.textContent = error.message);
+      .catch(error => {
+        errorBox.textContent = error.message;
+        setConnectionState(false);
+      });
     const events = new EventSource("/api/events");
-    events.onopen = () => setConnectionState(true);
-    events.onmessage = event => render(JSON.parse(event.data));
+    events.onmessage = event => {
+      connectionOnline = true;
+      render(JSON.parse(event.data));
+    };
     events.onerror = () => setConnectionState(false);
   </script>
 </body>

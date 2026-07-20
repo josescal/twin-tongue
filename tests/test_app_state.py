@@ -92,6 +92,24 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(0, snapshot["revision"])
 
+    async def test_all_modes_change_in_one_revision(self) -> None:
+        state = ApplicationState()
+
+        snapshot = await state.set_all_modes("translate")
+
+        self.assertEqual(1, snapshot["revision"])
+        for pipeline in snapshot["pipelines"].values():
+            self.assertEqual("translate", pipeline["mode"])
+            self.assertEqual("switching", pipeline["status"])
+
+    async def test_all_modes_only_changes_active_pipelines(self) -> None:
+        state = ApplicationState(active_pipelines=("remote_to_agent",))
+
+        snapshot = await state.set_all_modes("translate")
+
+        self.assertEqual("translate", snapshot["pipelines"]["remote_to_agent"]["mode"])
+        self.assertEqual("passthrough", snapshot["pipelines"]["agent_to_remote"]["mode"])
+
     async def test_pipeline_can_confirm_operational_status(self) -> None:
         state = ApplicationState()
 

@@ -18,6 +18,7 @@ htmlcov/
 build/
 dist/
 artifacts/
+docs/videos/
 packaging/*
 !packaging/build_distribution.ps1
 !packaging/certificate/

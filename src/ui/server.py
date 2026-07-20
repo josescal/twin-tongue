@@ -123,6 +123,19 @@ class LocalControlServer:
             elif method == "GET" and path == "/api/events":
                 await self._serve_events(writer)
                 return
+            elif method == "PUT" and path == "/api/pipelines":
+                payload = self._decode_json(body)
+                if not isinstance(payload.get("mode"), str):
+                    raise HttpRequestError(400, "The JSON body must contain a string 'mode'.")
+                try:
+                    snapshot = await self._state.set_all_modes(payload["mode"])
+                except ValueError as error:
+                    raise HttpRequestError(400, str(error)) from error
+                LOGGER.info(
+                    "event=control_changed setting=mode pipeline=all value=%s",
+                    payload["mode"],
+                )
+                await self._write_json(writer, 200, snapshot)
             elif method == "PUT" and path.startswith("/api/pipelines/"):
                 name = path.removeprefix("/api/pipelines/")
                 payload = self._decode_json(body)

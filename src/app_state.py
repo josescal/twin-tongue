@@ -376,6 +376,24 @@ class ApplicationState:
             self._statuses[parsed_name] = PipelineStatus.SWITCHING
             return self._publish_change()
 
+    async def set_all_modes(self, mode: str | PipelineMode) -> dict[str, object]:
+        """Change every active conversation direction in one state update."""
+        try:
+            parsed_mode = PipelineMode(mode)
+        except ValueError as error:
+            choices = ", ".join(item.value for item in PipelineMode)
+            raise ValueError(f"Invalid mode '{mode}'; expected one of: {choices}") from error
+
+        async with self._lock:
+            changed = False
+            for name in self._active_pipelines:
+                if self._modes[name] is parsed_mode:
+                    continue
+                self._modes[name] = parsed_mode
+                self._statuses[name] = PipelineStatus.SWITCHING
+                changed = True
+            return self._publish_change() if changed else self.snapshot()
+
     async def set_pipeline_status(
         self, name: str, status: str | PipelineStatus
     ) -> dict[str, object]:

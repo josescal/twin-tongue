@@ -62,6 +62,10 @@ The transcription view groups recognized and translated phrases so the agent can
 
 ![Twin Tongue transcription panel](docs/images/screenshot-transcription.png)
 
+## Demo
+
+Watch the [Twin Tongue end-to-end call demo on YouTube](https://youtu.be/kdVc0LEfKAI).
+
 ## Current status
 
 Twin Tongue is a working Windows desktop/runtime prototype with real audio routing, provider integrations, a local control panel, diagnostic tools, packaging support, automated tests, and successful end-to-end functional calls. It is not yet a polished consumer application or hosted service.

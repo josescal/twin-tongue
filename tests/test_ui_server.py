@@ -94,7 +94,17 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Call microphone", decoded_page)
         self.assertIn("Micrófono de la llamada", decoded_page)
         self.assertIn('name="voice-gender"', decoded_page)
-        self.assertIn('class="voice-recording-row"', decoded_page)
+        self.assertIn('class="settings-panel"', decoded_page)
+        self.assertIn('id="all-translation-button"', decoded_page)
+        self.assertNotIn('data-i18n="youHear"', decoded_page)
+        self.assertNotIn('data-i18n="theyHear"', decoded_page)
+        self.assertNotIn("You currently hear", decoded_page)
+        self.assertNotIn("Ahora escuchas", decoded_page)
+        self.assertNotIn("Por ahora se está usando", decoded_page)
+        self.assertNotIn("recuperará la selección guardada", decoded_page)
+        self.assertIn('id="offline-notice"', decoded_page)
+        self.assertIn("El proceso de Twin Tongue está desconectado", decoded_page)
+        self.assertIn('recording.classList.remove("active")', decoded_page)
         self.assertIn("Male", decoded_page)
         self.assertIn("Female", decoded_page)
         self.assertIn("Hombre", decoded_page)
@@ -115,9 +125,6 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('id="help-tab"', decoded_page)
         self.assertIn('id="help-panel"', decoded_page)
         self.assertIn("How to use Twin Tongue", decoded_page)
-        self.assertIn("Using this device for now", decoded_page)
-        self.assertIn("Por ahora se está usando", decoded_page)
-        self.assertIn("restore your saved selection", decoded_page)
         self.assertNotIn("The saved device is unavailable", decoded_page)
         self.assertIn("Cómo usar Twin Tongue", decoded_page)
         self.assertIn('id="application-version"', decoded_page)
@@ -182,6 +189,16 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
             json.loads(body)["pipelines"]["agent_to_remote"]["mode"],
         )
         self.assertEqual("translate", self.state.get_mode("agent_to_remote").value)
+
+    async def test_put_changes_both_pipeline_modes(self) -> None:
+        status, _, body = await self.request(
+            "PUT", "/api/pipelines", {"mode": "translate"}
+        )
+
+        self.assertEqual(200, status)
+        pipelines = json.loads(body)["pipelines"]
+        self.assertEqual("translate", pipelines["remote_to_agent"]["mode"])
+        self.assertEqual("translate", pipelines["agent_to_remote"]["mode"])
 
     async def test_shutdown_closes_an_active_event_stream_promptly(self) -> None:
         reader, writer = await asyncio.open_connection(
