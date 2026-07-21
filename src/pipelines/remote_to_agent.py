@@ -178,9 +178,12 @@ class RemoteToAgentPipeline:
             latency_protection_config["playback_backlog_segments_to_keep"]
         )
         self.latency_protection_enabled = bool(latency_protection_config["enabled"])
-        voice_detection_config = dict(pipeline_config["voice_detection"])
-        segmentation_config = dict(pipeline_config["segmentation"])
-        voice_detection_backend = str(self.config["voice_detection"]["backend"])
+        classic_config = dict(pipeline_config["classic"])
+        voice_detection_config = dict(classic_config["voice_detection"])
+        segmentation_config = dict(classic_config["segmentation"])
+        voice_detection_backend = str(
+            self.config["classic_pipeline"]["voice_detection"]["backend"]
+        )
         stt_max_audio_catchup_ms = float(
             pipeline_config["stt_max_audio_catchup_ms"]
         )
@@ -644,7 +647,6 @@ class RemoteToAgentPipeline:
         output_switch_error: str | None = None
         next_keepalive_at = time.monotonic() + stt_keepalive_seconds
         recording_observed = False
-        barge_in_suppressed = False
         logger.info(
             "event=pipeline_mode_observed requested_mode=%s effective_mode=%s",
             requested_mode.value,
@@ -734,31 +736,6 @@ class RemoteToAgentPipeline:
                         pacer.reset()
                         self._reset_processing_audio()
                         next_keepalive_at = time.monotonic() + stt_keepalive_seconds
-                capture_suppressed = (
-                    self.control_state is not None
-                    and self.control_state.is_capture_suppressed_by_barge_in(
-                        self.pipeline_name
-                    )
-                )
-                if capture_suppressed:
-                    if not barge_in_suppressed:
-                        barge_in_suppressed = True
-                        self._reset_processing_audio()
-                        pacer.reset()
-                        logger.debug(
-                            "event=barge_in_suppression_started pipeline=%s "
-                            "reason=opposite_translated_playback",
-                            self.pipeline_name,
-                        )
-                    continue
-                if barge_in_suppressed:
-                    barge_in_suppressed = False
-                    self._reset_processing_audio()
-                    pacer.reset()
-                    logger.debug(
-                        "event=barge_in_suppression_ended pipeline=%s",
-                        self.pipeline_name,
-                    )
                 if mode is PipelineMode.PASSTHROUGH:
                     if self._tts_playback_active:
                         continue
@@ -1081,13 +1058,6 @@ class RemoteToAgentPipeline:
                         return
                     await asyncio.sleep(frame_duration_ms / 4_000)
                 live_output.push_block(block)
-                if self.control_state is not None:
-                    self.control_state.note_translated_playback(
-                        self.pipeline_name,
-                        buffered_audio_ms=(
-                            max(1, live_output.buffered_blocks) * frame_duration_ms
-                        ),
-                    )
                 if output_audio_capture is not None and self._should_record_audio():
                     output_audio_capture.write(block)
                 output_pcm_bytes += len(block)
@@ -1124,6 +1094,7 @@ class RemoteToAgentPipeline:
             values: dict[str, object] = {
                 "pipeline": self.pipeline_name,
                 "mode": self._current_mode().value,
+                "engine": "classic",
                 "capture_blocks": capture.statistics.captured_blocks,
                 "capture_dropped_blocks": capture.statistics.dropped_blocks,
                 "capture_overflows": capture.statistics.input_overflows,
@@ -1268,7 +1239,7 @@ class RemoteToAgentPipeline:
         detector_load_started = time.perf_counter()
         try:
             voice_detector = await self.voice_detector_loader.load(
-                self.config["voice_detection"],
+                self.config["classic_pipeline"]["voice_detection"],
                 pipeline_settings,
                 processing_rate,
                 frame_duration_ms=frame_duration_ms,

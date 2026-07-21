@@ -10,6 +10,7 @@ METRIC_FIELDS = (
     "timestamp",
     "pipeline",
     "mode",
+    "engine",
     "capture_blocks",
     "capture_dropped_blocks",
     "capture_overflows",
@@ -45,6 +46,20 @@ METRIC_FIELDS = (
     "segmentation_punctuation_boundaries",
     "segmentation_short_pause_boundaries",
     "segmentation_maximum_duration_boundaries",
+    "realtime_first_audio_latency_ms",
+    "realtime_total_latency_ms",
+    "realtime_input_audio_duration_ms",
+    "realtime_output_audio_duration_ms",
+    "realtime_playback_buffered_blocks",
+    "realtime_playback_buffered_ms",
+    "realtime_playback_maximum_buffered_blocks",
+    "realtime_playback_maximum_buffered_ms",
+    "realtime_playback_dropped_blocks",
+    "realtime_playback_empty_buffer_events",
+    "realtime_input_transcript_characters",
+    "realtime_output_transcript_characters",
+    "realtime_errors",
+    "realtime_reconnections",
 )
 
 

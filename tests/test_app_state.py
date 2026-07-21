@@ -1,40 +1,10 @@
 import unittest
 
-from app_state import ApplicationState, PipelineMode, VoiceGender
+from app_state import ApplicationState, PipelineMode, TranslationEngine, VoiceGender
 from twin_tongue_version import __version__
 
 
 class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
-    def test_disabled_barge_in_suppresses_only_the_opposite_capture_with_tail(self) -> None:
-        state = ApplicationState(
-            barge_in_enabled=False,
-            barge_in_resume_delay_ms=300,
-        )
-
-        state.note_translated_playback(
-            "remote_to_agent", buffered_audio_ms=100, now=10.0
-        )
-
-        self.assertTrue(
-            state.is_capture_suppressed_by_barge_in("agent_to_remote", now=10.39)
-        )
-        self.assertFalse(
-            state.is_capture_suppressed_by_barge_in("agent_to_remote", now=10.40)
-        )
-        self.assertFalse(
-            state.is_capture_suppressed_by_barge_in("remote_to_agent", now=10.1)
-        )
-
-    def test_enabled_barge_in_never_suppresses_opposite_capture(self) -> None:
-        state = ApplicationState(barge_in_enabled=True)
-        state.note_translated_playback(
-            "remote_to_agent", buffered_audio_ms=1_000, now=10.0
-        )
-
-        self.assertFalse(
-            state.is_capture_suppressed_by_barge_in("agent_to_remote", now=10.1)
-        )
-
     async def test_snapshot_exposes_application_version(self) -> None:
         self.assertEqual(__version__, ApplicationState().snapshot()["application_version"])
 
@@ -91,6 +61,20 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
         snapshot = await state.set_mode("agent_to_remote", "passthrough")
 
         self.assertEqual(0, snapshot["revision"])
+
+    async def test_translation_engine_is_initialized_from_configuration(self) -> None:
+        state = ApplicationState(
+            initial_engines={"agent_to_remote": "openai_realtime"}
+        )
+
+        self.assertEqual(
+            TranslationEngine.OPENAI_REALTIME,
+            state.get_engine("agent_to_remote"),
+        )
+        self.assertEqual(
+            TranslationEngine.CLASSIC,
+            state.get_engine("remote_to_agent"),
+        )
 
     async def test_all_modes_change_in_one_revision(self) -> None:
         state = ApplicationState()
@@ -231,6 +215,47 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
         entry = state.snapshot()["transcription"]["entries"][0]
         self.assertEqual("unavailable", entry["translation_status"])
         self.assertIsNone(entry["translated_text"])
+
+    async def test_realtime_transcript_is_updated_in_place_and_finalized(self) -> None:
+        state = ApplicationState()
+
+        state.publish_realtime_transcript(
+            "remote_to_agent", 7, "Hello", "", "en", "es"
+        )
+        state.publish_realtime_transcript(
+            "remote_to_agent", 7, "Hello there", "Hola", "en", "es"
+        )
+
+        entries = state.snapshot()["transcription"]["entries"]
+        self.assertEqual(1, len(entries))
+        self.assertEqual("Hello there", entries[0]["source_text"])
+        self.assertEqual("Hola", entries[0]["translated_text"])
+        self.assertEqual("pending", entries[0]["translation_status"])
+
+        state.publish_realtime_transcript(
+            "remote_to_agent",
+            7,
+            "Hello there",
+            "Hola",
+            "en",
+            "es",
+            final=True,
+        )
+
+        entry = state.snapshot()["transcription"]["entries"][0]
+        self.assertEqual("complete", entry["translation_status"])
+
+    async def test_realtime_transcript_can_publish_translation_before_source(self) -> None:
+        state = ApplicationState()
+
+        state.publish_realtime_transcript(
+            "agent_to_remote", 3, "", "Hello", "es", "en"
+        )
+
+        entry = state.snapshot()["transcription"]["entries"][0]
+        self.assertEqual("", entry["source_text"])
+        self.assertEqual("Hello", entry["translated_text"])
+        self.assertEqual("pending", entry["translation_status"])
 
     async def test_transcription_is_bounded_and_can_be_cleared(self) -> None:
         state = ApplicationState()

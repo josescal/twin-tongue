@@ -95,6 +95,12 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Micrófono de la llamada", decoded_page)
         self.assertIn('name="voice-gender-remote_to_agent"', decoded_page)
         self.assertIn('name="voice-gender-agent_to_remote"', decoded_page)
+        self.assertNotIn('data-engine-pipeline="remote_to_agent"', decoded_page)
+        self.assertNotIn('<select id="engine-', decoded_page)
+        self.assertNotIn("Configured in default.toml", decoded_page)
+        self.assertNotIn("Configurado en default.toml", decoded_page)
+        self.assertIn("data-engine-value", decoded_page)
+        self.assertIn("OpenAI Realtime Translate", decoded_page)
         self.assertIn('class="settings-panel"', decoded_page)
         self.assertIn('id="all-translation-button"', decoded_page)
         self.assertNotIn('data-i18n="youHear"', decoded_page)
@@ -113,6 +119,16 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('id="transcription-tab"', decoded_page)
         self.assertIn("Conversation transcription", decoded_page)
         self.assertIn("Transcripción de la conversación", decoded_page)
+        self.assertIn("justify-self: start", decoded_page)
+        self.assertIn("justify-self: end", decoded_page)
+        self.assertIn(
+            'classList.toggle("translation-only", !hasSourceText)', decoded_page
+        )
+        self.assertIn('translatedParts.join("\\n")', decoded_page)
+        self.assertIn(
+            "paragraph.source_text.trim() || paragraph.translated_text.trim()",
+            decoded_page,
+        )
         self.assertIn("Other person said", decoded_page)
         self.assertIn("La otra persona ha dicho", decoded_page)
         self.assertIn("You hear", decoded_page)
@@ -155,6 +171,8 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("application/json", state_type)
         state = json.loads(body)
         self.assertEqual("passthrough", state["pipelines"]["remote_to_agent"]["mode"])
+        self.assertEqual("classic", state["pipelines"]["remote_to_agent"]["engine"])
+        self.assertNotIn("supported_translation_engines", state)
         self.assertEqual("en", state["ui_language"])
         self.assertEqual(["en", "es"], state["supported_ui_languages"])
         self.assertTrue(state["audio_recording"]["enabled"])
@@ -202,6 +220,17 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
         pipelines = json.loads(body)["pipelines"]
         self.assertEqual("translate", pipelines["remote_to_agent"]["mode"])
         self.assertEqual("translate", pipelines["agent_to_remote"]["mode"])
+
+    async def test_put_cannot_change_pipeline_translation_engine(self) -> None:
+        status, _, body = await self.request(
+            "PUT",
+            "/api/pipelines/agent_to_remote/engine",
+            {"engine": "openai_realtime"},
+        )
+
+        self.assertEqual(404, status)
+        self.assertEqual("Route not found.", json.loads(body)["error"])
+        self.assertEqual("classic", self.state.get_engine("agent_to_remote").value)
 
     async def test_shutdown_closes_an_active_event_stream_promptly(self) -> None:
         reader, writer = await asyncio.open_connection(

@@ -1,96 +1,54 @@
+schema_version = 2
+
 [audio]
-processing_sample_rate = 16000
 sample_format = "int16"
 frame_duration_ms = 20
 device_poll_interval_seconds = 5.0
 
 [audio.resampling]
-backend = "soxr"
+engine = "soxr"
 quality = "HQ"
 
-[voice_detection]
-backend = "silero"
-
-[voice_detection.silero]
-runtime = "onnx"
-opset_version = 16
-
-[pipelines.remote_to_agent]
+[pipeline.runtime.remote_to_agent]
 enabled = true
 mode = "passthrough"
-voice_gender = "male"
+type = "speech_to_speech"
+
+[pipeline.runtime.remote_to_agent.audio]
 input_sample_rate = 48000
 input_channels = 2
-output_channels = 1
 output_sample_rate = 48000
-stt_max_audio_catchup_ms = 100
+output_channels = 1
 
-[pipelines.remote_to_agent.latency_protection]
-enabled = true
-playback_backlog_discard_age_seconds = 8.0
-segment_discard_age_seconds = 15.0
-playback_backlog_segments_to_keep = 2
-
-[pipelines.remote_to_agent.voice_detection]
-threshold = 0.50
-negative_threshold = 0.35
-min_speech_duration_ms = 100
-min_silence_duration_ms = 350
-speech_pad_ms = 100
-
-[pipelines.remote_to_agent.segmentation]
-minimum_segment_duration_ms = 1500
-preferred_segment_duration_ms = 2500
-short_pause_duration_ms = 150
-partial_boundary_stability_ms = 200
-maximum_segment_duration_ms = 5000
-
-[pipelines.agent_to_remote]
+[pipeline.runtime.agent_to_remote]
 enabled = true
 mode = "passthrough"
-voice_gender = "male"
+type = "speech_to_speech"
+
+[pipeline.runtime.agent_to_remote.audio]
 input_sample_rate = 48000
 input_channels = 1
-output_channels = 2
 output_sample_rate = 48000
+output_channels = 2
+
+[pipeline.classic.defaults]
 stt_max_audio_catchup_ms = 100
 
-[pipelines.agent_to_remote.barge_in]
-# When disabled, the agent microphone is suppressed while remote-to-agent TTS
-# plays locally, preventing that TTS from being translated back to the caller.
-enabled = false
-resume_delay_ms = 300
-
-[pipelines.agent_to_remote.latency_protection]
-enabled = true
-playback_backlog_discard_age_seconds = 8.0
-segment_discard_age_seconds = 15.0
-playback_backlog_segments_to_keep = 2
-
-[pipelines.agent_to_remote.voice_detection]
-threshold = 0.70
-negative_threshold = 0.50
-min_speech_duration_ms = 200
-min_silence_duration_ms = 250
-speech_pad_ms = 100
-
-[pipelines.agent_to_remote.segmentation]
-minimum_segment_duration_ms = 2200
-preferred_segment_duration_ms = 2500
-short_pause_duration_ms = 150
-partial_boundary_stability_ms = 350
-maximum_segment_duration_ms = 5000
-
-[providers]
-stt = "elevenlabs"
-translation = "google_translate_basic_v2"
-tts = "elevenlabs"
-
-[providers.retry]
+[pipeline.classic.defaults.retry]
 max_attempts = 2
 base_delay_seconds = 0.75
 
-[stt]
+[pipeline.classic.defaults.vad]
+engine = "silero"
+
+[pipeline.classic.defaults.vad.silero]
+runtime = "onnx"
+opset_version = 16
+
+[pipeline.classic.defaults.stt]
+engine = "elevenlabs"
+
+[pipeline.classic.defaults.stt.elevenlabs]
 model = "scribe_v2_realtime"
 audio_format = "pcm_16000"
 sample_rate = 16000
@@ -101,53 +59,159 @@ send_chunk_duration_ms = 100
 queue_capacity_blocks = 50
 idle_keepalive_seconds = 5.0
 
-[stt.audio_capture]
+[pipeline.classic.defaults.stt.elevenlabs.audio_capture]
 enabled = true
 directory = "logs/stt-audio"
 max_seconds_per_file = 120.0
 # Enable only for detailed timing analysis; it creates an additional JSONL file.
 write_timing_marks = false
-# Batch small 20 ms blocks to reduce filesystem and antivirus overhead.
+# Batch small blocks to reduce filesystem and antivirus overhead.
 write_buffer_kb = 64
 flush_interval_seconds = 1.0
 
-[translation]
+[pipeline.classic.defaults.translation]
+engine = "google_translate_v2"
+
+[pipeline.classic.defaults.translation.google_translate_v2]
 endpoint = "https://translation.googleapis.com/language/translate/v2"
 format = "text"
 
-[tts]
+[pipeline.classic.defaults.tts]
+engine = "elevenlabs"
+
+[pipeline.classic.defaults.tts.elevenlabs]
 model = "eleven_flash_v2_5"
 voice_id = "851ejYcv2BoNPjrkw93G"
 output_format = "pcm_16000"
 sample_rate = 16000
 speed = 1.1
 
-[tts.language_voices]
+[pipeline.classic.defaults.tts.elevenlabs.language_voices]
 en = { male = "JBFqnCBsd6RMkjVDRZzb", female = "LudcwvHIZaqQOcQfVZSY" }
 fr = { male = "aQROLel5sQbj1vuIVi6B", female = "LudcwvHIZaqQOcQfVZSY" }
 es = { male = "851ejYcv2BoNPjrkw93G", female = "LudcwvHIZaqQOcQfVZSY" }
 ca = { male = "851ejYcv2BoNPjrkw93G", female = "LudcwvHIZaqQOcQfVZSY" }
 
-[tts.language_models]
+[pipeline.classic.defaults.tts.elevenlabs.language_models]
 ca = "eleven_v3"
 
-[logging]
-level = "DEBUG"
-# Set to false for an antivirus-sensitive run with console logging only.
-file_enabled = true
-log_file = "logs/twin-tongue.log"
-log_size_mb = 5
-log_max_files = 5
-log_queue_capacity = 1000
-# ERROR records still flush immediately; INFO/DEBUG records are batched.
-file_flush_interval_seconds = 5.0
-# Metrics write only twice per minute by default, but can also be disabled.
-metrics_enabled = false
-metrics_file = "logs/metrics.csv"
-metrics_retention_days = 14
-metrics_interval_seconds = 60.0
+[pipeline.classic.remote_to_agent]
+voice_gender = "male"
 
-[server]
+[pipeline.classic.remote_to_agent.latency_protection]
+enabled = true
+playback_backlog_discard_age_seconds = 8.0
+segment_discard_age_seconds = 15.0
+playback_backlog_segments_to_keep = 2
+
+[pipeline.classic.remote_to_agent.vad]
+engine = "silero"
+
+[pipeline.classic.remote_to_agent.vad.silero]
+threshold = 0.50
+negative_threshold = 0.35
+min_speech_duration_ms = 100
+min_silence_duration_ms = 350
+speech_pad_ms = 100
+
+[pipeline.classic.remote_to_agent.segmentation]
+engine = "adaptive"
+
+[pipeline.classic.remote_to_agent.segmentation.adaptive]
+minimum_segment_duration_ms = 1500
+preferred_segment_duration_ms = 2500
+short_pause_duration_ms = 150
+partial_boundary_stability_ms = 200
+maximum_segment_duration_ms = 5000
+
+[pipeline.classic.remote_to_agent.stt]
+engine = "elevenlabs"
+
+[pipeline.classic.remote_to_agent.translation]
+engine = "google_translate_v2"
+
+[pipeline.classic.remote_to_agent.tts]
+engine = "elevenlabs"
+
+[pipeline.classic.agent_to_remote]
+voice_gender = "male"
+
+[pipeline.classic.agent_to_remote.latency_protection]
+enabled = true
+playback_backlog_discard_age_seconds = 8.0
+segment_discard_age_seconds = 15.0
+playback_backlog_segments_to_keep = 2
+
+[pipeline.classic.agent_to_remote.vad]
+engine = "silero"
+
+[pipeline.classic.agent_to_remote.vad.silero]
+threshold = 0.70
+negative_threshold = 0.50
+min_speech_duration_ms = 200
+min_silence_duration_ms = 250
+speech_pad_ms = 100
+
+[pipeline.classic.agent_to_remote.segmentation]
+engine = "adaptive"
+
+[pipeline.classic.agent_to_remote.segmentation.adaptive]
+minimum_segment_duration_ms = 2200
+preferred_segment_duration_ms = 2500
+short_pause_duration_ms = 150
+partial_boundary_stability_ms = 350
+maximum_segment_duration_ms = 5000
+
+[pipeline.classic.agent_to_remote.stt]
+engine = "elevenlabs"
+
+[pipeline.classic.agent_to_remote.translation]
+engine = "google_translate_v2"
+
+[pipeline.classic.agent_to_remote.tts]
+engine = "elevenlabs"
+
+[pipeline.speech_to_speech.defaults.translation]
+engine = "openai_realtime"
+
+[pipeline.speech_to_speech.defaults.translation.openai_realtime]
+endpoint = "wss://api.openai.com/v1/realtime/translations"
+model = "gpt-realtime-translate"
+sample_rate = 24000
+send_chunk_duration_ms = 20
+input_queue_capacity_blocks = 25
+playback_queue_capacity_blocks = 25
+reconnect_max_attempts = 5
+reconnect_base_delay_seconds = 0.5
+session_setup_timeout_seconds = 10.0
+close_timeout_seconds = 2.0
+metrics_interval_seconds = 10.0
+log_transcript_deltas = false
+transcript_ui_update_interval_ms = 150
+transcript_segment_idle_ms = 500
+
+[pipeline.speech_to_speech.remote_to_agent.translation]
+engine = "openai_realtime"
+
+[pipeline.speech_to_speech.agent_to_remote.translation]
+engine = "openai_realtime"
+
+[observability.logging]
+level = "DEBUG"
+file_enabled = true
+file = "logs/twin-tongue.log"
+max_size_mb = 5
+max_files = 5
+queue_capacity = 1000
+file_flush_interval_seconds = 5.0
+
+[observability.metrics]
+enabled = false
+file = "logs/metrics.csv"
+retention_days = 14
+interval_seconds = 60.0
+
+[control_server]
 enabled = true
 host = "127.0.0.1"
 port = 8765

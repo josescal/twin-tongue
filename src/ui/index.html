@@ -52,6 +52,9 @@
     .settings-panel .device-field label { font-size: .74rem; }
     .settings-panel select { padding: 6px 7px; font-size: .75rem; }
     .voice-selector { display: grid; gap: 7px; margin: 0; padding: 8px 9px; border: 1px solid #e3e6eb; border-radius: 9px; background: #fff; }
+    .engine-info { display: grid; gap: 3px; margin-top: 9px; padding: 8px 9px; border: 1px solid #e3e6eb; border-radius: 9px; background: #f8fafb; }
+    .engine-info-label { color: #606a7c; font-size: .72rem; font-weight: 650; }
+    .engine-info-value { color: #343d4e; font-size: .8rem; }
     .voice-selector legend { padding: 0; color: #606a7c; font-size: .78rem; font-weight: 650; }
     .voice-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; width: 100%; }
     .voice-option { display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; padding: 5px 7px; border: 1px solid #d9dde5; border-radius: 7px; color: #343d4e; font-size: .75rem; font-weight: 650; cursor: pointer; }
@@ -92,19 +95,23 @@
     .transcription-heading p { margin: 0; color: #7b8495; font-size: .78rem; }
     .clear-transcription { flex: 0 0 auto; border: 1px solid #d9dde5; padding-inline: 10px; }
     .transcription-empty { display: grid; place-items: center; min-height: 300px; color: #7b8495; text-align: center; font-size: .86rem; }
-    .transcription-list { display: grid; gap: 12px; max-height: 65vh; overflow-y: auto; }
-    .transcript-entry { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid #e3e6eb; border-radius: 9px; background: #fafbfc; overflow: hidden; }
-    .transcript-entry.remote-turn { border-left: 4px solid #3b82f6; }
-    .transcript-entry.agent-turn { border-left: 4px solid #25a765; }
+    .transcription-list { display: grid; grid-template-columns: 1fr; align-items: start; gap: 12px; max-height: 65vh; overflow-y: auto; }
+    .transcript-entry { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: min(82%, 760px); box-sizing: border-box; border: 1px solid #e3e6eb; border-radius: 12px; background: #fafbfc; overflow: hidden; }
+    .transcript-entry.translation-only { grid-template-columns: 1fr; }
+    .transcript-entry.remote-turn { justify-self: end; border-right: 4px solid #3b82f6; }
+    .transcript-entry.agent-turn { justify-self: start; border-left: 4px solid #25a765; }
     .transcript-speaker { grid-column: 1 / -1; padding: 8px 14px; border-bottom: 1px solid #e3e6eb; color: #344054; font-size: .75rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
     .remote-turn .transcript-speaker { background: #eff6ff; color: #1d4ed8; }
     .agent-turn .transcript-speaker { background: #eefbf3; color: #12673d; }
     .source-block, .translated-block { min-width: 0; padding: 13px 14px; }
     .translated-block { border-left: 1px solid #e3e6eb; background: #f5fbf7; }
+    .translation-only .translated-block { border-left: 0; }
+    .remote-turn.translation-only .translated-block { background: #f4f8ff; }
     .transcript-label { margin-bottom: 3px; color: #7b8495; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
-    .transcript-text { margin: 0; color: #20293a; line-height: 1.55; }
+    .transcript-text { margin: 0; color: #20293a; line-height: 1.55; white-space: pre-wrap; }
     .transcript-meta { margin-top: 8px; color: #8a94a5; font-size: .68rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
     .translated-block .transcript-text { color: #12673d; }
+    .remote-turn.translation-only .transcript-text { color: #1d4ed8; }
     .translation-pending { color: #8a94a5 !important; font-style: italic; }
     .help-panel { display: grid; gap: 10px; }
     .help-panel[hidden] { display: none; }
@@ -123,6 +130,7 @@
       header { align-items: flex-start; }
       .header-actions { align-items: flex-end; flex-direction: column; }
       .control-layout, .grid, .languages, .routing-grid, .transcript-entry, .help-grid { grid-template-columns: 1fr; }
+      .transcript-entry { width: 92%; }
       .settings-panel { order: 2; }
       .translation-master { align-items: stretch; flex-direction: column; }
       .all-translation-button { width: 100%; min-width: 0; }
@@ -174,6 +182,10 @@
               <div class="choice" hidden>
                 <button data-mode="translate" data-i18n="translated">Translated</button><button data-mode="passthrough" data-i18n="untranslated">Untranslated</button>
               </div>
+              <div class="engine-info">
+                <span class="engine-info-label" data-i18n="translationEngine">Translation engine</span>
+                <strong class="engine-info-value" data-engine-value></strong>
+              </div>
               <fieldset class="voice-selector" data-voice-pipeline="remote_to_agent">
                 <legend data-i18n="remoteVoiceLegend">Translated voice you hear</legend>
                 <div class="voice-options">
@@ -187,6 +199,10 @@
               <div class="pipeline-gate" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span data-i18n="loadingOriginal">Loading system... Original audio is active.</span></div>
               <div class="choice" hidden>
                 <button data-mode="translate" data-i18n="translated">Translated</button><button data-mode="passthrough" data-i18n="untranslated">Untranslated</button>
+              </div>
+              <div class="engine-info">
+                <span class="engine-info-label" data-i18n="translationEngine">Translation engine</span>
+                <strong class="engine-info-value" data-engine-value></strong>
               </div>
               <fieldset class="voice-selector" data-voice-pipeline="agent_to_remote">
                 <legend data-i18n="agentVoiceLegend">Translated voice the other person hears</legend>
@@ -295,7 +311,7 @@
       en: {
         eyebrow: "Control panel", connecting: "Connecting...", connected: "Connected", reconnecting: "Disconnected",
         tabControl: "Control", tabTranscription: "Transcription", tabHelp: "Help",
-        remoteLanguage: "Other person's language", agentLanguage: "Your language", settingsTitle: "Configuration", remoteVoiceLegend: "Translated voice you hear", agentVoiceLegend: "Translated voice the other person hears", male: "Male", female: "Female",
+        remoteLanguage: "Other person's language", agentLanguage: "Your language", settingsTitle: "Configuration", translationEngine: "Translation engine", classicEngine: "Classic (STT + translation + TTS)", openaiRealtimeEngine: "OpenAI Realtime Translate", remoteVoiceLegend: "Translated voice you hear", agentVoiceLegend: "Translated voice the other person hears", male: "Male", female: "Female",
         speakerLabel: "Your speakers or headphones are:", micLabel: "Your microphone is:",
         remotePipelineTitle: "Audio you hear", agentPipelineTitle: "Audio the other person hears", loadingOriginal: "Loading system... Original audio is active.",
         translated: "Translated", untranslated: "Untranslated", bothDirectionsTitle: "Two-way translation", bothDirectionsHelp: "Apply the same mode to both sides of the conversation.", enableBothDirections: "Translate both ways", disableBothDirections: "Use original audio both ways",
@@ -311,7 +327,7 @@
         noticeTitle: "Keep in mind", noticeText: "Transcription and translation can contain errors, especially with noise, names, strong accents, or very fast speech. Translation also takes a few seconds because the system must listen, interpret, translate, and play the phrase.",
         labels: { translate: "translated audio", passthrough: "untranslated audio" },
         savedDeviceUnavailable: "The saved device is unavailable:", usingFallbackDevice: "Using instead:",
-        statusLabels: { starting: "Preparing audio...", system_loading: "Loading system - original audio active", switching: "Applying change...", initializing: "Preparing translation...", translation_unavailable: "Translation unavailable - original audio active", translation_ready: "Ready: you can start speaking", passthrough: "untranslated audio", error: "Audio setup error" },
+        statusLabels: { starting: "Preparing audio...", system_loading: "Loading system - original audio active", switching: "Applying change...", initializing: "Preparing translation...", reconnecting: "Reconnecting translation - original audio active", translation_unavailable: "Translation unavailable - original audio active", translation_ready: "Ready: you can start speaking", passthrough: "untranslated audio", error: "Audio setup error" },
         languages: { en: "English", es: "Spanish", fr: "French", ca: "Catalan" },
         noDevice: "No audio device available", noAudioDevice: "No audio device is available", automaticDevice: "Automatic (Windows communications device)", defaultDevice: "default", savedDeviceSelection: "saved selection", cableUnavailable: "Cable unavailable", callApplicationDisconnected: "No call application connected", checkVbCable: "Check the VB-CABLE installation.", selectCableA: "Select CABLE A as the speaker in the call application.", selectCableB: "Select CABLE B as the microphone in the call application.", noConnectedApp: "No connected application", appConnected: "Application connected to this cable", processDisconnectedDetail: "The Twin Tongue process is disconnected. Audio, translation, and recording are stopped.", recordingDisconnected: "Recording stopped: process disconnected.",
         audioNotStarted: "Audio not started", remoteSpeaker: "Other person", agentSpeaker: "You", remoteSaid: "Other person said", agentHears: "You hear", agentSaid: "You said", remoteHears: "Other person hears", paragraphMeta: "Paragraph", segmentsMeta: "segments", notTranslated: "It was not translated.", translating: "Translating...", clearFailed: "Could not clear transcription.", languageFailed: "Could not change the language.", uiLanguageFailed: "Could not change the interface language.", voiceFailed: "Could not change the voice.", deviceFailed: "Could not change the audio device.", modeFailed: "Could not change the mode.", translationFailedDetail: "Translation could not be prepared. Original audio remains active."
@@ -319,7 +335,7 @@
       es: {
         eyebrow: "Panel de control", connecting: "Conectando...", connected: "Conectado", reconnecting: "Sin conexión",
         tabControl: "Control", tabTranscription: "Transcripción", tabHelp: "Ayuda",
-        remoteLanguage: "Idioma de la otra persona", agentLanguage: "Tu idioma", settingsTitle: "Configuración", remoteVoiceLegend: "Voz traducida que escuchas", agentVoiceLegend: "Voz traducida que escucha la otra persona", male: "Hombre", female: "Mujer",
+        remoteLanguage: "Idioma de la otra persona", agentLanguage: "Tu idioma", settingsTitle: "Configuración", translationEngine: "Motor de traducción", classicEngine: "Clásico (STT + traducción + TTS)", openaiRealtimeEngine: "OpenAI Realtime Translate", remoteVoiceLegend: "Voz traducida que escuchas", agentVoiceLegend: "Voz traducida que escucha la otra persona", male: "Hombre", female: "Mujer",
         speakerLabel: "Tus altavoces o auriculares son:", micLabel: "Tu micrófono es:",
         remotePipelineTitle: "Audio que escuchas tú", agentPipelineTitle: "Audio que escucha la otra persona", loadingOriginal: "Cargando el sistema... El audio original está activo.",
         translated: "Traducido", untranslated: "Sin traducir", bothDirectionsTitle: "Traducción en ambos sentidos", bothDirectionsHelp: "Aplica el mismo modo a los dos sentidos de la conversación.", enableBothDirections: "Traducir en ambos sentidos", disableBothDirections: "Usar audio original en ambos sentidos",
@@ -335,7 +351,7 @@
         noticeTitle: "Ten en cuenta", noticeText: "La transcripción y la traducción pueden contener errores, especialmente con ruido, nombres propios, acentos marcados o habla muy rápida. La traducción también necesita unos segundos porque el sistema debe escuchar, interpretar, traducir y reproducir la frase.",
         labels: { translate: "el audio traducido", passthrough: "el audio sin traducir" },
         savedDeviceUnavailable: "El dispositivo guardado no está disponible:", usingFallbackDevice: "Se está usando:",
-        statusLabels: { starting: "Preparando el audio...", system_loading: "Cargando el sistema - audio original activo", switching: "Aplicando el cambio...", initializing: "Preparando la traducción...", translation_unavailable: "Traducción no disponible - audio original activo", translation_ready: "Listo: puedes empezar a hablar", passthrough: "el audio sin traducir", error: "Error al preparar el audio" },
+        statusLabels: { starting: "Preparando el audio...", system_loading: "Cargando el sistema - audio original activo", switching: "Aplicando el cambio...", initializing: "Preparando la traducción...", reconnecting: "Reconectando la traducción - audio original activo", translation_unavailable: "Traducción no disponible - audio original activo", translation_ready: "Listo: puedes empezar a hablar", passthrough: "el audio sin traducir", error: "Error al preparar el audio" },
         languages: { en: "Inglés", es: "Español", fr: "Francés", ca: "Catalán" },
         noDevice: "Ningún dispositivo disponible", noAudioDevice: "No hay ningún dispositivo de audio disponible", automaticDevice: "Automático (dispositivo de comunicaciones de Windows)", defaultDevice: "predeterminado", savedDeviceSelection: "selección guardada", cableUnavailable: "Cable no disponible", callApplicationDisconnected: "Ninguna aplicación de llamada conectada", checkVbCable: "Comprueba la instalación de VB-CABLE.", selectCableA: "Selecciona CABLE A como altavoz en la aplicación de llamada.", selectCableB: "Selecciona CABLE B como micrófono en la aplicación de llamada.", noConnectedApp: "Ninguna aplicación conectada", appConnected: "Aplicación conectada a este cable", processDisconnectedDetail: "El proceso de Twin Tongue está desconectado. El audio, la traducción y la grabación están detenidos.", recordingDisconnected: "Grabación detenida: proceso desconectado.",
         audioNotStarted: "Audio no iniciado", remoteSpeaker: "Otra persona", agentSpeaker: "Tú", remoteSaid: "La otra persona ha dicho", agentHears: "Tú escuchas", agentSaid: "Has dicho", remoteHears: "La otra persona escucha", paragraphMeta: "Párrafo", segmentsMeta: "segmentos", notTranslated: "No llegó a traducirse.", translating: "Traduciendo...", clearFailed: "No se pudo limpiar la transcripción.", languageFailed: "No se pudo cambiar el idioma.", uiLanguageFailed: "No se pudo cambiar el idioma de la interfaz.", voiceFailed: "No se pudo cambiar la voz.", deviceFailed: "No se pudo cambiar el dispositivo de audio.", modeFailed: "No se pudo cambiar el modo.", translationFailedDetail: "No se pudo preparar la traducción. El audio original sigue activo."
@@ -533,6 +549,12 @@
         gate.hidden = controlsReady || !pipeline.running;
         gate.classList.toggle("failed", failed);
         gate.querySelector("span:last-child").textContent = failed ? t("translationFailedDetail") : t("loadingOriginal");
+        const engineValue = card.querySelector("[data-engine-value]");
+        engineValue.textContent = t(
+          pipeline.engine === "openai_realtime" ? "openaiRealtimeEngine" : "classicEngine"
+        );
+        const voiceSelector = card.querySelector(".voice-selector");
+        voiceSelector.hidden = pipeline.engine !== "classic";
         for (const button of card.querySelectorAll("button")) {
           button.classList.toggle("active", button.dataset.mode === pipeline.mode);
           button.disabled = !controlsReady;
@@ -555,11 +577,13 @@
       const entries = state.transcription?.entries || [];
       const paragraphs = buildTranscriptParagraphs(entries);
       list.replaceChildren();
-      empty.hidden = entries.length > 0;
+      empty.hidden = paragraphs.length > 0;
       for (const [index, paragraph] of paragraphs.entries()) {
         const remoteTurn = paragraph.pipeline === "remote_to_agent";
+        const hasSourceText = Boolean(paragraph.source_text.trim());
         const article = document.createElement("article");
         article.className = `transcript-entry ${remoteTurn ? "remote-turn" : "agent-turn"}`;
+        article.classList.toggle("translation-only", !hasSourceText);
         const speaker = document.createElement("div");
         speaker.className = "transcript-speaker";
         speaker.textContent = remoteTurn ? t("remoteSpeaker") : t("agentSpeaker");
@@ -592,10 +616,12 @@
           targetText.classList.add("translation-pending");
         }
         translated.append(targetLabel, targetText);
-        article.append(speaker, source, translated);
+        article.append(speaker);
+        if (hasSourceText) article.append(source);
+        article.append(translated);
         list.append(article);
       }
-      if (entries.length) list.scrollTop = list.scrollHeight;
+      if (paragraphs.length) list.scrollTop = list.scrollHeight;
     }
 
     function buildTranscriptParagraphs(entries) {
@@ -628,10 +654,13 @@
           };
           paragraphs.push(current);
         }
-        current.sourceParts.push(entry.source_text);
-        if (entry.translation_status === "complete" && entry.translated_text) {
+        if (entry.source_text) {
+          current.sourceParts.push(entry.source_text);
+        }
+        if (entry.translated_text) {
           current.translatedParts.push(entry.translated_text);
-        } else if (entry.translation_status === "pending") {
+        }
+        if (entry.translation_status === "pending") {
           current.translation_status = "pending";
         } else if (entry.translation_status === "unavailable") {
           current.translation_status = "unavailable";
@@ -642,11 +671,11 @@
         pipeline: paragraph.pipeline,
         source_language: paragraph.source_language,
         target_language: paragraph.target_language,
-        source_text: paragraph.sourceParts.join(" "),
-        translated_text: paragraph.translatedParts.join(" "),
+        source_text: paragraph.sourceParts.join("\n"),
+        translated_text: paragraph.translatedParts.join("\n"),
         translation_status: paragraph.translation_status,
         count: paragraph.count
-      }));
+      })).filter(paragraph => paragraph.source_text.trim() || paragraph.translated_text.trim());
     }
 
     function endsAtSentenceBoundary(text) {

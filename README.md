@@ -5,7 +5,7 @@ Twin Tongue is a Windows application for bidirectional, real-time speech transla
 - `remote_to_agent`: captures the remote participant, transcribes and translates their speech, and plays the result through the agent's headphones.
 - `agent_to_remote`: captures the agent's microphone, transcribes and translates their speech, and sends the synthesized result to the calling application.
 
-Each direction can run in translated mode or as direct PCM passthrough. The local control panel exposes pipeline state, participant languages, voice selection, audio devices, final transcripts, call connections, and operational status.
+Each direction can run in translated mode or as direct PCM passthrough. Translated mode can use either the existing segmented STT -> text translation -> TTS pipeline or OpenAI Realtime Translate speech-to-speech streaming. The configured engine is shown in the local control panel independently for each direction.
 
 ## Problem and motivation
 
@@ -25,6 +25,13 @@ Agent microphone -> Twin Tongue -> STT -> translation -> TTS
 Twin Tongue -> CABLE-B Input -> CABLE-B Output -> calling application
 ```
 
+With `engine = "openai_realtime"`, each direction instead uses:
+
+```text
+captured PCM -> 24 kHz mono streaming -> OpenAI Realtime Translate
+translated PCM streaming -> existing output resampling/routing -> destination
+```
+
 The `remote_to_agent` pipeline listens to the audio that the calling application sends into `CABLE-A Input`. Twin Tongue captures it from `CABLE-A Output`, detects speech, sends speech segments to STT, translates final transcripts, synthesizes translated speech, and plays the result through the agent's selected output device.
 
 The `agent_to_remote` pipeline captures the agent microphone, processes it through the same STT, translation, and TTS stages, and writes the translated audio to `CABLE-B Input`. The calling application uses `CABLE-B Output` as its microphone source.
@@ -37,6 +44,7 @@ Bounded queues, stale-segment protection, asynchronous logging, periodic metrics
 
 - Independent bidirectional pipelines with isolated provider sessions and queues.
 - Runtime switching between `passthrough` and `translate` mode per direction.
+- Runtime selection between the `classic` and `openai_realtime` translation engines per direction.
 - English, Spanish, French, and Catalan language selection.
 - Male and female translated voice selection through configured ElevenLabs voices.
 - Silero VAD using bundled ONNX models.
@@ -45,10 +53,11 @@ Bounded queues, stale-segment protection, asynchronous logging, periodic metrics
 - Configurable STT provider chunk duration, set to 100 ms by default.
 - Google Cloud Translation Basic v2.
 - ElevenLabs streaming TTS.
+- OpenAI Realtime Translate streaming speech-to-speech as an optional alternative.
 - Automatic Windows communications-device discovery and selectable physical devices.
 - Fixed CABLE A and CABLE B routing with active call-session visibility.
 - A loopback-only local web control panel at `http://127.0.0.1:8765`.
-- Final transcript visibility and diagnostic recording controls.
+- Classic final transcripts and OpenAI Realtime streaming transcripts in the control panel.
 - Rotating logs, daily CSV metrics, and automated tests.
 - Windows distribution packaging through PyInstaller.
 
@@ -76,7 +85,7 @@ Current development priorities include:
 - stronger audio-device and virtual-route validation;
 - continued tuning of STT segmentation and false-positive rejection;
 - lower end-to-end conversational latency;
-- acoustic echo cancellation that preserves safe barge-in and full-duplex conversation;
+- acoustic echo cancellation for robust full-duplex conversation;
 - noise reduction before VAD and STT;
 - broader reliability validation with real meeting and contact-center software;
 - evolution into a distributable Windows service with an installable package and a supported desktop control surface;
@@ -88,6 +97,7 @@ Current development priorities include:
 - VB-CABLE A+B for integration with calling applications.
 - ElevenLabs credentials for STT and TTS.
 - Google Cloud Translation Basic v2 credentials.
+- An OpenAI API key when using the OpenAI Realtime Translate engine.
 - Headphones, strongly recommended during audio tests.
 
 Do not run hardware audio diagnostics from WSL. PortAudio must access native Windows audio devices.
@@ -122,10 +132,12 @@ Twin Tongue reads these values from `.env`:
 - `ELEVENLABS_API_KEY` for speech-to-text and text-to-speech.
 - `GOOGLE_TRANSLATE_API_KEY` for Google Cloud Translation Basic v2.
 - `GOOGLE_TRANSLATE_PROJECT_ID` as local project metadata only. It is not sent by the translation client.
+- `OPENAI_API_KEY` for the optional OpenAI Realtime Translate engine.
+- `OPENAI_SAFETY_IDENTIFIER` optionally supplies a stable pseudonymous end-user identifier.
 
 Never commit or share `.env`. API keys are not written to application logs.
 
-Runtime defaults live in `config/default.toml`. This file defines audio formats, providers, pipeline behavior, voice detection, segmentation, latency protection, TTS voices, diagnostic recording, logging, metrics, and the local server.
+Runtime defaults live in the namespaced schema-v2 `config/default.toml`. Select the immutable startup type for each direction with `pipeline.runtime.<direction>.type`: `classic` or `speech_to_speech`. Classic stages and vendors live below `pipeline.classic`; OpenAI settings live below `pipeline.speech_to_speech`. The control panel displays this selection but cannot change it; restart Twin Tongue after editing the file. See [Configuration namespaces](docs/configuration.md) and [OpenAI Realtime Translate architecture](docs/openai-realtime-translate.md).
 
 The application stores the selected physical input and output devices, interface language, participant languages, and the independent voice gender for each translation direction in `config/preferences.json`. Device preferences use stable endpoint IDs and fall back to the Windows communications defaults while a saved device is unavailable.
 
@@ -179,17 +191,17 @@ The project uses the standard library's `unittest` runner:
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Tests cover application state, audio buffering and pacing, device discovery, provider behavior, resampling, VAD, speech segmentation, pipeline latency policy, logging, metrics, and the local UI server. Hardware diagnostics remain explicit manual tests because their result depends on the host devices and drivers.
+Tests cover application state, audio buffering and pacing, device discovery, provider behavior, resampling, Classic-only VAD and speech segmentation, pipeline latency policy, logging, metrics, and the local UI server. OpenAI Realtime streams audio directly and never loads the local VAD. Hardware diagnostics remain explicit manual tests because their result depends on the host devices and drivers.
 
 ## Logs, metrics, and diagnostic audio
 
-Runtime logs are written asynchronously to `logs/twin-tongue.log`. Rotation size, retained file count, queue capacity, and level are configured in `[logging]`.
+Runtime logs are written asynchronously to `logs/twin-tongue.log`. Rotation size, retained file count, queue capacity, and level are configured in `[observability.logging]`.
 
-Metrics are written to daily `logs/metrics-YYYY-MM-DD.csv` files. They include queue pressure, discarded blocks and segments, callback gaps, output underflows, event-loop lag, recording drops, provider activity, playback latency, VAD, and segmentation counters.
+Metrics are written to daily `logs/metrics-YYYY-MM-DD.csv` files. They include the selected engine, queue pressure, discarded blocks and segments, callback gaps, output underflows, event-loop lag, recording drops, provider activity, playback latency, VAD, and segmentation counters. Realtime rows also include first translated audio latency, trailing total latency, input/output audio duration, errors, and reconnections.
 
 Timestamped ElevenLabs transcripts expose word-level `logprob` values. Debug traces record word count, average and minimum log probability, timing, and word data to support analysis of STT false positives.
 
-When `[stt.audio_capture].enabled` is `true`, diagnostic audio is recorded automatically for each direction using translation. The control panel also provides manual recording controls. Generated audio, logs, and metrics are excluded from source control and distribution packages.
+When `[pipeline.classic.defaults.stt.elevenlabs.audio_capture].enabled` is `true`, diagnostic audio is recorded automatically for each Classic direction using translation. The control panel also provides manual recording controls. Generated audio, logs, and metrics are excluded from source control and distribution packages.
 
 ## Building a Windows distribution
 

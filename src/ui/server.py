@@ -161,6 +161,12 @@ class LocalControlServer:
                     payload["gender"],
                 )
                 await self._write_json(writer, 200, snapshot)
+            elif (
+                method == "PUT"
+                and path.startswith("/api/pipelines/")
+                and path.endswith("/engine")
+            ):
+                raise HttpRequestError(404, "Route not found.")
             elif method == "PUT" and path.startswith("/api/pipelines/"):
                 name = path.removeprefix("/api/pipelines/")
                 payload = self._decode_json(body)

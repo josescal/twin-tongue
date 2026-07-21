@@ -14,9 +14,10 @@ from audio.portaudio import AudioDeviceError
 from audio.voice_detection import VoiceDetectorLoader, preload_voice_detection_package
 from config import ConfigurationError, configure_logging, load_config, shutdown_logging
 from app_state import ApplicationState
+from engines.openai_realtime import OpenAIRealtimeTranslationFactory
 from metrics import CsvMetricsWriter
 from twin_tongue_version import __version__
-from pipelines import AgentToRemotePipeline, RemoteToAgentPipeline
+from pipelines import DirectionalPipelineSupervisor
 from providers.errors import ProviderError
 from providers.factory import ProviderFactory
 from ui import LocalControlServer
@@ -114,8 +115,6 @@ async def run_application(args: argparse.Namespace) -> None:
     assert isinstance(stt_settings, dict)
     audio_capture_settings = stt_settings["audio_capture"]
     assert isinstance(audio_capture_settings, dict)
-    barge_in_settings = agent_settings["barge_in"]
-    assert isinstance(barge_in_settings, dict)
     device_manager = AudioDeviceManager(
         PROJECT_ROOT / "config" / "preferences.json",
         poll_interval_seconds=float(
@@ -133,6 +132,10 @@ async def run_application(args: argparse.Namespace) -> None:
                 "remote_to_agent": str(remote_settings["mode"]),
                 "agent_to_remote": str(agent_settings["mode"]),
             },
+            initial_engines={
+                "remote_to_agent": str(remote_settings.get("engine", "classic")),
+                "agent_to_remote": str(agent_settings.get("engine", "classic")),
+            },
             initial_languages={
                 "agent": device_manager.participant_languages["agent"],
                 "remote": device_manager.participant_languages["remote"],
@@ -141,15 +144,24 @@ async def run_application(args: argparse.Namespace) -> None:
             initial_ui_language=device_manager.ui_language,
             audio_recording_enabled=bool(audio_capture_settings["enabled"]),
             active_pipelines=selected_names,
-            barge_in_enabled=bool(barge_in_settings["enabled"]),
-            barge_in_resume_delay_ms=float(barge_in_settings["resume_delay_ms"]),
         )
     except ValueError as error:
         raise ConfigurationError(str(error)) from error
     control_state.attach_device_manager(device_manager)
-    provider_factory = ProviderFactory.from_environment(
-        config,
-        PROJECT_ROOT / ".env",
+    initial_engines = {
+        name: control_state.get_engine(name).value for name in selected_names
+    }
+    classic_factory = (
+        ProviderFactory.from_environment(config, PROJECT_ROOT / ".env")
+        if "classic" in initial_engines.values()
+        else None
+    )
+    realtime_factory = (
+        OpenAIRealtimeTranslationFactory.from_environment(
+            config, PROJECT_ROOT / ".env"
+        )
+        if "openai_realtime" in initial_engines.values()
+        else None
     )
     logger = logging.getLogger(__name__)
     logger.info(
@@ -159,33 +171,46 @@ async def run_application(args: argparse.Namespace) -> None:
         PROJECT_ROOT / "config" / "default.toml",
         configured_log_path,
     )
-    voice_detection_settings = config["voice_detection"]
+    classic_pipeline_settings = config["classic_pipeline"]
+    assert isinstance(classic_pipeline_settings, dict)
+    voice_detection_settings = classic_pipeline_settings["voice_detection"]
     assert isinstance(voice_detection_settings, dict)
-    preload_voice_detection_package(voice_detection_settings)
+    if classic_factory is not None:
+        preload_voice_detection_package(voice_detection_settings)
     startup_barrier = asyncio.Barrier(2) if args.pipeline == "both" else None
     voice_detector_loader = VoiceDetectorLoader()
-    selected_pipelines: dict[str, RemoteToAgentPipeline] = {}
+    selected_pipelines: dict[str, DirectionalPipelineSupervisor] = {}
     if "remote_to_agent" in selected_names:
-        selected_pipelines["remote_to_agent"] = RemoteToAgentPipeline(
+        selected_pipelines["remote_to_agent"] = DirectionalPipelineSupervisor(
             config=config,
-            provider_factory=provider_factory,
+            env_path=PROJECT_ROOT / ".env",
+            pipeline_name="remote_to_agent",
+            source_language_name="remote",
+            target_language_name="agent",
             voice_detector_loader=voice_detector_loader,
             duration=duration,
             startup_barrier=startup_barrier,
             control_state=control_state,
             device_manager=device_manager,
             metrics_writer=metrics_writer,
+            classic_factory=classic_factory,
+            realtime_factory=realtime_factory,
         )
     if "agent_to_remote" in selected_names:
-        selected_pipelines["agent_to_remote"] = AgentToRemotePipeline(
+        selected_pipelines["agent_to_remote"] = DirectionalPipelineSupervisor(
             config=config,
-            provider_factory=provider_factory,
+            env_path=PROJECT_ROOT / ".env",
+            pipeline_name="agent_to_remote",
+            source_language_name="agent",
+            target_language_name="remote",
             voice_detector_loader=voice_detector_loader,
             duration=duration,
             startup_barrier=startup_barrier,
             control_state=control_state,
             device_manager=device_manager,
             metrics_writer=metrics_writer,
+            classic_factory=classic_factory,
+            realtime_factory=realtime_factory,
         )
     await device_manager.start()
     web_enabled = bool(server_settings["enabled"]) if args.web is None else args.web

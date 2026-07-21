@@ -175,8 +175,6 @@ class RealtimePipelineTests(unittest.TestCase):
         pipeline = _pipeline()
         pipeline.control_state = ApplicationState(
             initial_modes={"remote_to_agent": "translate"},
-            barge_in_enabled=False,
-            barge_in_resume_delay_ms=300,
         )
         chunks: asyncio.Queue[TTSChunk | None] = asyncio.Queue()
         chunks.put_nowait(
@@ -237,11 +235,6 @@ class RealtimePipelineTests(unittest.TestCase):
         self.assertEqual(640, sum(map(len, output.writes)))
         self.assertEqual(1, pipeline.statistics.played_segments)
         self.assertEqual(640, pipeline.statistics.played_pcm_bytes)
-        self.assertTrue(
-            pipeline.control_state.is_capture_suppressed_by_barge_in(
-                "agent_to_remote"
-            )
-        )
 
     def test_translation_remains_passthrough_until_voice_detector_is_ready(self) -> None:
         pipeline = _pipeline()

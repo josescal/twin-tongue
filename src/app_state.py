@@ -3,7 +3,6 @@
 import asyncio
 from contextlib import asynccontextmanager
 from enum import StrEnum
-import time
 from typing import AsyncIterator, Literal, TypeAlias, cast
 
 from audio.device_manager import AudioDeviceManager
@@ -36,6 +35,13 @@ class PipelineMode(StrEnum):
     PASSTHROUGH = "passthrough"
 
 
+class TranslationEngine(StrEnum):
+    """Selectable translation implementations for one audio direction."""
+
+    CLASSIC = "classic"
+    OPENAI_REALTIME = "openai_realtime"
+
+
 class VoiceGender(StrEnum):
     """Available synthesized speaker voices."""
 
@@ -50,6 +56,7 @@ class PipelineStatus(StrEnum):
     SYSTEM_LOADING = "system_loading"
     SWITCHING = "switching"
     INITIALIZING = "initializing"
+    RECONNECTING = "reconnecting"
     TRANSLATION_UNAVAILABLE = "translation_unavailable"
     TRANSLATION_READY = "translation_ready"
     PASSTHROUGH = "passthrough"
@@ -62,13 +69,12 @@ class ApplicationState:
     def __init__(
         self,
         initial_modes: dict[str, str] | None = None,
+        initial_engines: dict[str, str] | None = None,
         initial_languages: dict[str, str] | None = None,
         initial_voice_genders: dict[str, str] | None = None,
         initial_ui_language: str = "en",
         audio_recording_enabled: bool = False,
         active_pipelines: tuple[str, ...] = PIPELINE_NAMES,
-        barge_in_enabled: bool = True,
-        barge_in_resume_delay_ms: float = 300,
     ) -> None:
         requested_modes = initial_modes or {}
         self._modes: dict[PipelineName, PipelineMode] = {
@@ -96,16 +102,16 @@ class ApplicationState:
             name: VoiceGender(requested_voice_genders.get(name, VoiceGender.MALE))
             for name in PIPELINE_NAMES
         }
+        requested_engines = initial_engines or {}
+        self._engines: dict[PipelineName, TranslationEngine] = {
+            name: TranslationEngine(
+                requested_engines.get(name, TranslationEngine.CLASSIC)
+            )
+            for name in PIPELINE_NAMES
+        }
         self._ui_language = self._parse_ui_language(initial_ui_language)
         self._audio_recording_enabled = bool(audio_recording_enabled)
         self._manual_audio_recording = False
-        if barge_in_resume_delay_ms < 0:
-            raise ValueError("Barge-in resume delay must not be negative.")
-        self._barge_in_enabled = bool(barge_in_enabled)
-        self._barge_in_resume_delay_seconds = barge_in_resume_delay_ms / 1000
-        self._translated_playback_until: dict[PipelineName, float] = {
-            name: 0.0 for name in PIPELINE_NAMES
-        }
         self._transcripts: list[dict[str, object]] = []
         self._revision = 0
         self._lock = asyncio.Lock()
@@ -130,6 +136,10 @@ class ApplicationState:
         parsed_name = self._parse_pipeline_name(name)
         return self._modes[parsed_name]
 
+    def get_engine(self, name: str) -> TranslationEngine:
+        """Return the selected translation engine for a pipeline."""
+        return self._engines[self._parse_pipeline_name(name)]
+
     def snapshot(self) -> dict[str, object]:
         """Return a JSON-serializable view of the current state."""
         result: dict[str, object] = {
@@ -148,17 +158,13 @@ class ApplicationState:
                 "manual": self._manual_audio_recording,
                 "automatic_pipelines": list(self._automatic_recording_pipelines()),
             },
-            "barge_in": {
-                "enabled": self._barge_in_enabled,
-                "pipeline": "agent_to_remote",
-                "resume_delay_ms": self._barge_in_resume_delay_seconds * 1000,
-            },
             "transcription": {
                 "entries": [dict(entry) for entry in self._transcripts],
             },
             "pipelines": {
                 name: {
                     "mode": self._modes[name].value,
+                    "engine": self._engines[name].value,
                     "voice_gender": self._voice_genders[name].value,
                     "running": name in self._active_pipelines,
                     "status": self._statuses[name].value,
@@ -274,37 +280,6 @@ class ApplicationState:
             self._manual_audio_recording = active
             return self._publish_change()
 
-    def note_translated_playback(
-        self,
-        name: str,
-        buffered_audio_ms: float,
-        *,
-        now: float | None = None,
-    ) -> None:
-        """Extend the interval that blocks barge-in from the opposite microphone."""
-        parsed_name = self._parse_pipeline_name(name)
-        if self._barge_in_enabled:
-            return
-        if buffered_audio_ms < 0:
-            raise ValueError("Buffered translated playback must not be negative.")
-        current_time = time.monotonic() if now is None else now
-        blocked_until = current_time + (
-            buffered_audio_ms / 1000 + self._barge_in_resume_delay_seconds
-        )
-        self._translated_playback_until[parsed_name] = max(
-            self._translated_playback_until[parsed_name], blocked_until
-        )
-
-    def is_capture_suppressed_by_barge_in(
-        self, name: str, *, now: float | None = None
-    ) -> bool:
-        """Return whether opposite translated playback currently owns the turn."""
-        parsed_name = self._parse_pipeline_name(name)
-        if self._barge_in_enabled or parsed_name != "agent_to_remote":
-            return False
-        current_time = time.monotonic() if now is None else now
-        return current_time < self._translated_playback_until["remote_to_agent"]
-
     def publish_transcript_final(
         self,
         pipeline_name: str,
@@ -342,6 +317,53 @@ class ApplicationState:
                 self._transcripts[index] = updated
                 self._publish_change()
                 return
+
+    def publish_realtime_transcript(
+        self,
+        pipeline_name: str,
+        transcript_id: int,
+        source_text: str,
+        translated_text: str,
+        source_language: str,
+        target_language: str,
+        *,
+        final: bool = False,
+    ) -> None:
+        """Create or update one in-memory streaming translation transcript."""
+        parsed_pipeline_name = self._parse_pipeline_name(pipeline_name)
+        normalized_source = source_text.strip()
+        normalized_translation = translated_text.strip()
+        if not normalized_source and not normalized_translation:
+            return
+        translation_status = (
+            "complete"
+            if final and normalized_translation
+            else "unavailable"
+            if final
+            else "pending"
+        )
+        updated: dict[str, object] = {
+            "id": transcript_id,
+            "pipeline": parsed_pipeline_name,
+            "source_text": normalized_source,
+            "translated_text": normalized_translation or None,
+            "translation_status": translation_status,
+            "source_language": source_language,
+            "target_language": target_language,
+        }
+        for index, entry in enumerate(self._transcripts):
+            if (
+                entry["pipeline"] == parsed_pipeline_name
+                and entry["id"] == transcript_id
+            ):
+                if entry == updated:
+                    return
+                self._transcripts[index] = updated
+                self._publish_change()
+                return
+        self._transcripts.append(updated)
+        del self._transcripts[:-TRANSCRIPTION_HISTORY_LIMIT]
+        self._publish_change()
 
     def mark_transcript_translation_unavailable(
         self, pipeline_name: str, transcript_id: int
