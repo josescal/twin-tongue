@@ -30,6 +30,10 @@ class VirtualCablePair:
     render_index: int
     capture_sessions: tuple[CoreAudioSession, ...] = ()
     render_sessions: tuple[CoreAudioSession, ...] = ()
+    capture_endpoint_id: str | None = None
+    render_endpoint_id: str | None = None
+    capture_sessions_known: bool = False
+    render_sessions_known: bool = False
 
 
 def discover_virtual_cables(
@@ -64,18 +68,28 @@ def discover_virtual_cables(
             continue
         capture_endpoint_id = part.get("capture_endpoint_id")
         render_endpoint_id = part.get("render_endpoint_id")
+        capture_sessions, capture_sessions_known = (
+            _query_sessions(capture_endpoint_id) if include_sessions else ((), False)
+        )
+        render_sessions, render_sessions_known = (
+            _query_sessions(render_endpoint_id) if include_sessions else ((), False)
+        )
         result.append(
             VirtualCablePair(
                 stable_id=stable_id,
                 name=f"CABLE {part['letter'] or 'estándar'}",
                 capture_index=int(part["capture_index"]),
                 render_index=int(part["render_index"]),
-                capture_sessions=(
-                    _safe_sessions(capture_endpoint_id) if include_sessions else ()
+                capture_sessions=capture_sessions,
+                render_sessions=render_sessions,
+                capture_endpoint_id=(
+                    str(capture_endpoint_id) if capture_endpoint_id else None
                 ),
-                render_sessions=(
-                    _safe_sessions(render_endpoint_id) if include_sessions else ()
+                render_endpoint_id=(
+                    str(render_endpoint_id) if render_endpoint_id else None
                 ),
+                capture_sessions_known=capture_sessions_known,
+                render_sessions_known=render_sessions_known,
             )
         )
     return sorted(result, key=lambda cable: cable.name.casefold())
@@ -103,9 +117,63 @@ def retain_sessions(
                 if cable.stable_id in previous_by_id
                 else ()
             ),
+            capture_endpoint_id=cable.capture_endpoint_id,
+            render_endpoint_id=cable.render_endpoint_id,
+            capture_sessions_known=(
+                previous_by_id[cable.stable_id].capture_sessions_known
+                if cable.stable_id in previous_by_id
+                else False
+            ),
+            render_sessions_known=(
+                previous_by_id[cable.stable_id].render_sessions_known
+                if cable.stable_id in previous_by_id
+                else False
+            ),
         )
         for cable in cables
     ]
+
+
+def refresh_sessions(cables: list[VirtualCablePair]) -> list[VirtualCablePair]:
+    """Refresh only application sessions, without re-enumerating audio devices."""
+    refreshed: list[VirtualCablePair] = []
+    for cable in cables:
+        capture_sessions, capture_known = _query_sessions(
+            cable.capture_endpoint_id
+        )
+        render_sessions, render_known = _query_sessions(cable.render_endpoint_id)
+        refreshed.append(
+            VirtualCablePair(
+                stable_id=cable.stable_id,
+                name=cable.name,
+                capture_index=cable.capture_index,
+                render_index=cable.render_index,
+                capture_sessions=(
+                    capture_sessions if capture_known else cable.capture_sessions
+                ),
+                render_sessions=(
+                    render_sessions if render_known else cable.render_sessions
+                ),
+                capture_endpoint_id=cable.capture_endpoint_id,
+                render_endpoint_id=cable.render_endpoint_id,
+                capture_sessions_known=capture_known,
+                render_sessions_known=render_known,
+            )
+        )
+    return refreshed
+
+
+def application_session_active(
+    cables: list[VirtualCablePair],
+    route: CableRoute,
+) -> bool | None:
+    """Return active application presence, or None when it cannot be observed."""
+    cable = _selected_cable(cables, route)
+    if cable is None:
+        return None
+    if route == "remote_input":
+        return bool(cable.render_sessions) if cable.render_sessions_known else None
+    return bool(cable.capture_sessions) if cable.capture_sessions_known else None
 
 
 def active_cable_index(
@@ -133,6 +201,10 @@ def virtual_cable_signature(cables: list[VirtualCablePair]) -> tuple[object, ...
             cable.render_index,
             cable.capture_sessions,
             cable.render_sessions,
+            cable.capture_endpoint_id,
+            cable.render_endpoint_id,
+            cable.capture_sessions_known,
+            cable.render_sessions_known,
         )
         for cable in cables
     )
@@ -180,20 +252,26 @@ def _match_endpoint(name: str, endpoints: list[CoreAudioEndpoint]) -> CoreAudioE
     return next((endpoint for endpoint in endpoints if _normalize(endpoint.name) == normalized), None)
 
 
-def _safe_sessions(endpoint_id: object) -> tuple[CoreAudioSession, ...]:
+def _query_sessions(
+    endpoint_id: object,
+) -> tuple[tuple[CoreAudioSession, ...], bool]:
     if not endpoint_id:
-        return ()
+        return (), False
     try:
-        return tuple(
+        sessions = query_audio_sessions(str(endpoint_id))
+    except OSError:
+        return (), False
+    return (
+        tuple(
             session
-            for session in query_audio_sessions(str(endpoint_id))
+            for session in sessions
             if session.process_id != 0
             and session.process_id != os.getpid()
             and session.state == "active"
             and not session.application_name.casefold().startswith("cable-")
-        )
-    except OSError:
-        return ()
+        ),
+        True,
+    )
 
 
 def _normalize(value: str) -> str:

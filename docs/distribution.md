@@ -42,7 +42,9 @@ The build signs unsigned executables, DLLs, Python extensions, and scripts with 
 1. Extract the ZIP completely to a writable directory. Do not run the executable from inside the ZIP.
 2. If the package contains `CERTIFICATE/`, verify the public certificate thumbprint through an independent channel.
 3. Only for an approved controlled environment, open PowerShell as administrator and run `CERTIFICATE/INSTALL_CERTIFICATE.ps1`.
-4. Copy `env.example` to `.env` and enter the ElevenLabs and Google Cloud Translation credentials. Never share this file.
+4. Copy `env.example` to `.env`. For the shipped Realtime default, enter
+   `OPENAI_API_KEY`. Add ElevenLabs and Google Cloud Translation credentials only
+   if a direction is configured as Classic. Never share this file.
 5. Install and validate CABLE A and CABLE B by following `VB-CABLE/SETUP.md`.
 6. Run `Twin-Tongue.exe` and keep its console window open.
 7. Open `http://127.0.0.1:8765` on the same computer.
@@ -50,3 +52,12 @@ The build signs unsigned executables, DLLs, Python extensions, and scripts with 
 9. If the test computer should no longer trust future builds with the same identity, run `CERTIFICATE/REMOVE_CERTIFICATE.ps1` as administrator.
 
 Twin Tongue sends audio and text to external providers for transcription, translation, and voice synthesis. Inform call participants and follow applicable privacy, consent, data-handling, and organizational policies.
+
+The shipped configuration uses OpenAI Realtime in both directions but starts in
+passthrough. Enabling translation does not open an API session until a call
+application is detected on the relevant cable. The diagnostic configuration
+controls whether Realtime writes `captured`, `accepted`, `sent`, and `played`
+audio plus per-call manifests below its configured local directory. Classic
+diagnostic recording follows its own configuration. Diagnostic artifacts are
+excluded from packages; review privacy and retention requirements before
+enabling them on a recipient system.

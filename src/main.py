@@ -6,10 +6,13 @@ import logging
 from pathlib import Path
 import signal
 import sys
+from collections.abc import Mapping
 
 import sounddevice as sd
 
 from audio.device_manager import AudioDeviceManager
+from audio.echo_guard import EchoReferenceBus
+from audio.wav_capture import repair_incomplete_wav_headers
 from audio.portaudio import AudioDeviceError
 from audio.voice_detection import VoiceDetectorLoader, preload_voice_detection_package
 from config import ConfigurationError, configure_logging, load_config, shutdown_logging
@@ -57,6 +60,45 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _create_voice_detector_loader(
+    config: dict[str, object],
+    initial_engines: Mapping[str, str],
+) -> VoiceDetectorLoader | None:
+    """Initialize Silero only when a selected direction uses the classic pipeline."""
+    if "classic" not in initial_engines.values():
+        return None
+
+    classic_pipeline_settings = config["classic_pipeline"]
+    assert isinstance(classic_pipeline_settings, dict)
+    voice_detection_settings = classic_pipeline_settings["voice_detection"]
+    assert isinstance(voice_detection_settings, dict)
+    preload_voice_detection_package(voice_detection_settings)
+    return VoiceDetectorLoader()
+
+
+def _select_pipeline_names(
+    requested_pipeline: str,
+    pipelines: Mapping[str, object],
+) -> tuple[str, ...]:
+    """Resolve CLI selection while honoring directions disabled in configuration."""
+    candidates = (
+        ("remote_to_agent", "agent_to_remote")
+        if requested_pipeline == "both"
+        else (requested_pipeline,)
+    )
+    selected = tuple(
+        name
+        for name in candidates
+        if isinstance(pipelines.get(name), dict)
+        and bool(pipelines[name].get("enabled"))
+    )
+    if selected:
+        return selected
+    if requested_pipeline == "both":
+        raise ConfigurationError("At least one pipeline direction must be enabled.")
+    raise ConfigurationError(f"pipelines.{requested_pipeline} must be enabled.")
+
+
 async def run_application(args: argparse.Namespace) -> None:
     """Load configuration and run the selected pipeline directions."""
     config = load_config(PROJECT_ROOT / "config" / "default.toml")
@@ -100,25 +142,24 @@ async def run_application(args: argparse.Namespace) -> None:
     agent_settings = pipelines["agent_to_remote"]
     assert isinstance(remote_settings, dict)
     assert isinstance(agent_settings, dict)
-    selected_names = (
-        ("remote_to_agent", "agent_to_remote")
-        if args.pipeline == "both"
-        else (args.pipeline,)
-    )
-    for name in selected_names:
-        settings = remote_settings if name == "remote_to_agent" else agent_settings
-        if not bool(settings["enabled"]):
-            raise ConfigurationError(f"pipelines.{name} must be enabled.")
+    selected_names = _select_pipeline_names(args.pipeline, pipelines)
     audio_settings = config["audio"]
     stt_settings = config["stt"]
     assert isinstance(audio_settings, dict)
     assert isinstance(stt_settings, dict)
     audio_capture_settings = stt_settings["audio_capture"]
     assert isinstance(audio_capture_settings, dict)
+    virtual_cable_settings = audio_settings["virtual_cables"]
+    assert isinstance(virtual_cable_settings, dict)
+    session_monitor_settings = virtual_cable_settings["session_monitor"]
+    assert isinstance(session_monitor_settings, dict)
     device_manager = AudioDeviceManager(
         PROJECT_ROOT / "config" / "preferences.json",
         poll_interval_seconds=float(
             audio_settings.get("device_poll_interval_seconds", 5.0)
+        ),
+        session_poll_interval_seconds=float(
+            session_monitor_settings["poll_interval_seconds"]
         ),
         default_voice_genders={
             "remote_to_agent": str(remote_settings["voice_gender"]),
@@ -142,7 +183,18 @@ async def run_application(args: argparse.Namespace) -> None:
             },
             initial_voice_genders=device_manager.voice_genders,
             initial_ui_language=device_manager.ui_language,
-            audio_recording_enabled=bool(audio_capture_settings["enabled"]),
+            audio_recording_enabled=bool(audio_capture_settings["enabled"])
+            and any(
+                str(
+                    (
+                        remote_settings
+                        if name == "remote_to_agent"
+                        else agent_settings
+                    ).get("engine", "classic")
+                )
+                == "classic"
+                for name in selected_names
+            ),
             active_pipelines=selected_names,
         )
     except ValueError as error:
@@ -171,15 +223,22 @@ async def run_application(args: argparse.Namespace) -> None:
         PROJECT_ROOT / "config" / "default.toml",
         configured_log_path,
     )
-    classic_pipeline_settings = config["classic_pipeline"]
-    assert isinstance(classic_pipeline_settings, dict)
-    voice_detection_settings = classic_pipeline_settings["voice_detection"]
-    assert isinstance(voice_detection_settings, dict)
-    if classic_factory is not None:
-        preload_voice_detection_package(voice_detection_settings)
-    startup_barrier = asyncio.Barrier(2) if args.pipeline == "both" else None
-    voice_detector_loader = VoiceDetectorLoader()
+    # Directions are deliberately independent: one may wait for a call, restart,
+    # or be disabled without preventing the other from carrying audio.
+    startup_barrier = None
+    voice_detector_loader = _create_voice_detector_loader(config, initial_engines)
+    if voice_detector_loader is None:
+        logger.info(
+            "event=voice_detection_skipped reason=no_selected_classic_pipeline"
+        )
     selected_pipelines: dict[str, DirectionalPipelineSupervisor] = {}
+    realtime_capture_directory = Path(
+        str(
+            config["realtime_translation"]["openai"]["audio_capture"]["directory"]
+        )
+    )
+    repair_incomplete_wav_headers(realtime_capture_directory)
+    echo_reference = EchoReferenceBus()
     if "remote_to_agent" in selected_names:
         selected_pipelines["remote_to_agent"] = DirectionalPipelineSupervisor(
             config=config,
@@ -195,6 +254,7 @@ async def run_application(args: argparse.Namespace) -> None:
             metrics_writer=metrics_writer,
             classic_factory=classic_factory,
             realtime_factory=realtime_factory,
+            echo_reference=echo_reference,
         )
     if "agent_to_remote" in selected_names:
         selected_pipelines["agent_to_remote"] = DirectionalPipelineSupervisor(
@@ -211,6 +271,7 @@ async def run_application(args: argparse.Namespace) -> None:
             metrics_writer=metrics_writer,
             classic_factory=classic_factory,
             realtime_factory=realtime_factory,
+            echo_reference=echo_reference,
         )
     await device_manager.start()
     web_enabled = bool(server_settings["enabled"]) if args.web is None else args.web
@@ -245,7 +306,8 @@ async def run_application(args: argparse.Namespace) -> None:
         await asyncio.gather(*tasks.values(), return_exceptions=True)
         raise
     finally:
-        await voice_detector_loader.close()
+        if voice_detector_loader is not None:
+            await voice_detector_loader.close()
         if control_server is not None:
             await control_server.close()
         await device_manager.close()
@@ -322,6 +384,28 @@ def _resolve_runtime_paths(config: dict[str, object]) -> None:
     capture_directory = Path(str(audio_capture["directory"]))
     if not capture_directory.is_absolute():
         audio_capture["directory"] = str(PROJECT_ROOT / capture_directory)
+    realtime_translation = config["realtime_translation"]
+    assert isinstance(realtime_translation, dict)
+    openai_defaults = realtime_translation["openai"]
+    assert isinstance(openai_defaults, dict)
+    realtime_capture = openai_defaults["audio_capture"]
+    assert isinstance(realtime_capture, dict)
+    realtime_capture_directory = Path(str(realtime_capture["directory"]))
+    if not realtime_capture_directory.is_absolute():
+        realtime_capture["directory"] = str(
+            PROJECT_ROOT / realtime_capture_directory
+        )
+    directions = realtime_translation.get("directions", {})
+    assert isinstance(directions, dict)
+    for direction_settings in directions.values():
+        assert isinstance(direction_settings, dict)
+        direction_capture = direction_settings["audio_capture"]
+        assert isinstance(direction_capture, dict)
+        direction_capture_directory = Path(str(direction_capture["directory"]))
+        if not direction_capture_directory.is_absolute():
+            direction_capture["directory"] = str(
+                PROJECT_ROOT / direction_capture_directory
+            )
 
 
 if __name__ == "__main__":

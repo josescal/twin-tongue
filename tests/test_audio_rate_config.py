@@ -19,6 +19,14 @@ class AudioRateConfigurationTests(unittest.TestCase):
         self.assertIn("classic", raw["pipeline"])
         self.assertIn("speech_to_speech", raw["pipeline"])
         self.assertEqual(
+            "speech_to_speech",
+            raw["pipeline"]["runtime"]["remote_to_agent"]["type"],
+        )
+        self.assertEqual(
+            "speech_to_speech",
+            raw["pipeline"]["runtime"]["agent_to_remote"]["type"],
+        )
+        self.assertEqual(
             "elevenlabs",
             raw["pipeline"]["classic"]["remote_to_agent"]["stt"]["engine"],
         )
@@ -75,7 +83,7 @@ class AudioRateConfigurationTests(unittest.TestCase):
             ["playback_queue_capacity_blocks"],
         )
         self.assertEqual(
-            25,
+            10,
             config["realtime_translation"]["directions"]["agent_to_remote"]
             ["playback_queue_capacity_blocks"],
         )
@@ -85,6 +93,7 @@ class AudioRateConfigurationTests(unittest.TestCase):
 
         self.assertNotIn("languages", config)
         self.assertEqual(config["audio"]["processing_sample_rate"], 16_000)
+        self.assertFalse(config["audio"]["physical_capture_exclusive_mode"])
         self.assertEqual(config["stt"]["sample_rate"], 16_000)
         self.assertEqual(config["stt"]["audio_format"], "pcm_16000")
         self.assertTrue(config["stt"]["include_timestamps"])
@@ -129,11 +138,34 @@ class AudioRateConfigurationTests(unittest.TestCase):
             config["realtime_translation"]["openai"]["input_queue_capacity_blocks"],
         )
         self.assertEqual(
-            25,
+            10,
             config["realtime_translation"]["openai"]["playback_queue_capacity_blocks"],
         )
         self.assertFalse(
             config["realtime_translation"]["openai"]["log_transcript_deltas"]
+        )
+        self.assertEqual(
+            {
+                "enabled": True,
+                "directory": "logs/realtime-audio",
+                "max_seconds_per_file": 120.0,
+                "write_timing_marks": True,
+                "queue_capacity_blocks": 500,
+                "write_buffer_kb": 64,
+                "flush_interval_seconds": 1.0,
+                "echo_guard": {
+                    "enabled": False,
+                    "reference_activity_dbfs": -48.0,
+                    "near_end_override_dbfs": -26.0,
+                    "post_reference_override_dbfs": -38.0,
+                    "near_end_hold_ms": 800.0,
+                    "hangover_ms": 350.0,
+                    "correlation_window_ms": 200.0,
+                    "reference_delay_max_ms": 500.0,
+                    "correlation_threshold": 0.72,
+                },
+            },
+            config["realtime_translation"]["openai"]["audio_capture"],
         )
         self.assertEqual(
             150,
@@ -146,6 +178,20 @@ class AudioRateConfigurationTests(unittest.TestCase):
             config["realtime_translation"]["openai"][
                 "transcript_segment_idle_ms"
             ],
+        )
+        self.assertEqual(
+            {
+                "poll_interval_seconds": 1.0,
+                "failure_grace_seconds": 5.0,
+            },
+            config["audio"]["virtual_cables"]["session_monitor"],
+        )
+        self.assertEqual(
+            {
+                "enabled": True,
+                "disconnect_grace_seconds": 3.0,
+            },
+            config["realtime_translation"]["openai"]["session_gate"],
         )
         for language in ("ca", "en", "es", "fr"):
             voices = config["tts"]["language_voices"][language]
@@ -165,7 +211,7 @@ class AudioRateConfigurationTests(unittest.TestCase):
         )
         self.assertEqual(
             config["pipelines"]["agent_to_remote"]["input_channels"],
-            1,
+            2,
         )
         self.assertEqual(
             config["pipelines"]["remote_to_agent"]["output_sample_rate"],

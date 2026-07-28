@@ -1,6 +1,6 @@
 """Blocking PCM audio playback using SoundDevice raw streams."""
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 import logging
 import time
 
@@ -31,6 +31,8 @@ class QueuedAudioOutput:
         dtype: str,
         frames_per_block: int,
         queue_capacity_blocks: int = 10,
+        played_observer: Callable[[bytes], None] | None = None,
+        exclusive: bool = False,
     ) -> None:
         if queue_capacity_blocks <= 0:
             raise ValueError("Queue capacity must be greater than zero.")
@@ -41,6 +43,8 @@ class QueuedAudioOutput:
         self.frames_per_block = frames_per_block
         self.block_bytes = calculate_block_bytes(frames_per_block, channels, dtype)
         self.queue_capacity_blocks = queue_capacity_blocks
+        self.played_observer = played_observer
+        self.exclusive = exclusive
         self._blocks = PcmBlockBuffer(queue_capacity_blocks, self.block_bytes)
         self._silence = bytes(self.block_bytes)
         self._fade_frames = min(
@@ -86,10 +90,23 @@ class QueuedAudioOutput:
             channels=self.channels,
             dtype=self.dtype,
             blocksize=self.frames_per_block,
+            extra_settings=(
+                sd.WasapiSettings(exclusive=True)
+                if self.exclusive
+                else None
+            ),
             callback=self._output_callback,
         )
         try:
             self.stream.start()
+            logger.info(
+                "event=audio_output_stream_opened device_id=%s mode=%s "
+                "sample_rate_hz=%s channels=%s",
+                self.output_device,
+                "exclusive" if self.exclusive else "shared",
+                self.sample_rate,
+                self.channels,
+            )
         except Exception:
             self.stop()
             raise
@@ -169,6 +186,13 @@ class QueuedAudioOutput:
                 self._discontinuity_pending = False
             self._remember_last_frame(outdata)
             self.played_blocks += 1
+            if self.played_observer is not None:
+                try:
+                    self.played_observer(bytes(outdata))  # type: ignore[arg-type]
+                except Exception:
+                    logger.exception(
+                        "event=audio_played_observer_failed action=observer_ignored"
+                    )
             return
         outdata[:] = self._silence  # type: ignore[index]
         self._fade_out(outdata)

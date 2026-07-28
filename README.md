@@ -2,10 +2,14 @@
 
 Twin Tongue is a Windows application for bidirectional, real-time speech translation during calls. It connects physical audio devices and two VB-CABLE routes to provide two independent flows:
 
-- `remote_to_agent`: captures the remote participant, transcribes and translates their speech, and plays the result through the agent's headphones.
-- `agent_to_remote`: captures the agent's microphone, transcribes and translates their speech, and sends the synthesized result to the calling application.
+- `remote_to_agent`: captures the remote participant and plays either original or translated audio through the agent's headphones.
+- `agent_to_remote`: captures the agent's microphone and sends either original or translated audio to the calling application.
 
-Each direction can run in translated mode or as direct PCM passthrough. Translated mode can use either the existing segmented STT -> text translation -> TTS pipeline or OpenAI Realtime Translate speech-to-speech streaming. The configured engine is shown in the local control panel independently for each direction.
+Each direction can run in translated mode or as direct PCM passthrough. Its immutable
+startup type is selected in `config/default.toml`: the existing segmented
+STT -> text translation -> TTS pipeline or OpenAI Realtime Translate
+speech-to-speech streaming. The control panel reports that selection but does not
+change it while Twin Tongue is running.
 
 ## Problem and motivation
 
@@ -18,52 +22,70 @@ Twin Tongue is submitted in the **Productivity and Business** category because i
 ## How it works
 
 ```text
-Remote application -> CABLE-A Input -> CABLE-A Output -> Twin Tongue
-Twin Tongue -> STT -> translation -> TTS -> agent headphones
+Calling application -> CABLE-A Input -> CABLE-A Output -> Twin Tongue
+Twin Tongue -> selected remote_to_agent pipeline -> agent headphones
 
-Agent microphone -> Twin Tongue -> STT -> translation -> TTS
+Agent microphone -> Twin Tongue -> selected agent_to_remote pipeline
 Twin Tongue -> CABLE-B Input -> CABLE-B Output -> calling application
 ```
 
-With `engine = "openai_realtime"`, each direction instead uses:
+The Classic pipeline uses:
 
 ```text
-captured PCM -> 24 kHz mono streaming -> OpenAI Realtime Translate
-translated PCM streaming -> existing output resampling/routing -> destination
+captured PCM -> Silero VAD -> adaptive segmentation -> ElevenLabs STT
+-> Google text translation -> ElevenLabs TTS -> destination
 ```
 
-The `remote_to_agent` pipeline listens to the audio that the calling application sends into `CABLE-A Input`. Twin Tongue captures it from `CABLE-A Output`, detects speech, sends speech segments to STT, translates final transcripts, synthesizes translated speech, and plays the result through the agent's selected output device.
+The speech-to-speech pipeline uses:
 
-The `agent_to_remote` pipeline captures the agent microphone, processes it through the same STT, translation, and TTS stages, and writes the translated audio to `CABLE-B Input`. The calling application uses `CABLE-B Output` as its microphone source.
+```text
+captured PCM -> 24 kHz mono stream -> OpenAI Realtime Translate
+-> translated PCM stream -> existing output resampling/routing -> destination
+```
 
-Audio is captured as 48 kHz `int16` PCM in 20 ms blocks. Input is converted to mono and resampled once to 16 kHz for Silero VAD and ElevenLabs Realtime STT. Audio sent to STT is grouped into configurable provider chunks, 100 ms by default. Translated text is synthesized with ElevenLabs streaming TTS, resampled for the selected output, and played incrementally.
+The default configuration selects OpenAI Realtime in both directions and starts
+both in passthrough. Realtime does not instantiate Silero or the Classic
+segmenter, and does not use Classic STT/TTS recording. Its separate diagnostic
+capture can write raw input, provider-bound audio, and translated output while
+translation is active. Switching either direction to `type = "classic"` restores
+the existing Classic behavior for that direction without changing the other.
 
-Bounded queues, stale-segment protection, asynchronous logging, periodic metrics, and independent provider sessions keep the two real-time paths responsive and isolated.
+Audio is captured as 48 kHz `int16` PCM in 20 ms blocks. Callback-driven bounded
+queues, streaming resampling, asynchronous logging, independent directional
+sessions, and passthrough fallback keep both paths responsive and isolated.
 
 ## Core capabilities
 
 - Independent bidirectional pipelines with isolated provider sessions and queues.
 - Runtime switching between `passthrough` and `translate` mode per direction.
-- Runtime selection between the `classic` and `openai_realtime` translation engines per direction.
+- Configuration-only selection between Classic and speech-to-speech pipelines per direction.
 - English, Spanish, French, and Catalan language selection.
-- Male and female translated voice selection through configured ElevenLabs voices.
-- Silero VAD using bundled ONNX models.
-- Configurable minimum speech and silence durations to reject short false activations.
-- ElevenLabs Realtime STT with timestamped words and diagnostic `logprob` traces.
-- Configurable STT provider chunk duration, set to 100 ms by default.
-- Google Cloud Translation Basic v2.
-- ElevenLabs streaming TTS.
-- OpenAI Realtime Translate streaming speech-to-speech as an optional alternative.
+- Classic-only male/female translated voice selection through configured ElevenLabs voices.
+- Classic-only Silero VAD, adaptive segmentation, ElevenLabs Realtime STT,
+  Google Cloud Translation Basic v2, and ElevenLabs streaming TTS.
+- OpenAI Realtime Translate streaming speech-to-speech without local VAD.
 - Automatic Windows communications-device discovery and selectable physical devices.
 - Fixed CABLE A and CABLE B routing with active call-session visibility.
 - A loopback-only local web control panel at `http://127.0.0.1:8765`.
-- Classic final transcripts and OpenAI Realtime streaming transcripts in the control panel.
+- Classic final transcripts and available OpenAI Realtime translated transcript
+  deltas in a left/right conversation view.
+- Call-aware Realtime sessions that consume no OpenAI resources while no
+  application is connected to the corresponding cable.
+- Per-direction requested/effective translation status and original-audio
+  fallback during initialization or recovery.
+- Physical-microphone health checks based on real callbacks, automatic
+  sample-rate/channel negotiation, transactional hot switching, and fallback
+  to the last working microphone when an endpoint stops delivering audio.
 - Rotating logs, daily CSV metrics, and automated tests.
 - Windows distribution packaging through PyInstaller.
 
 ## Screenshots
 
-The control panel exposes both translation directions, participant languages, translated voice, physical audio devices, passthrough or translation mode, recording controls, and applications connected to the virtual call routes.
+The control panel exposes both translation directions, participant languages,
+physical audio devices, passthrough or translation mode, selected pipeline,
+operational state, and applications connected to the virtual call routes. Voice
+and diagnostic-recording controls appear only when they apply to an active
+Classic direction.
 
 ![Twin Tongue control panel](docs/images/screenshot-control_panel.png)
 
@@ -95,9 +117,9 @@ Current development priorities include:
 
 - Windows with native Windows Python 3.12 or later.
 - VB-CABLE A+B for integration with calling applications.
-- ElevenLabs credentials for STT and TTS.
-- Google Cloud Translation Basic v2 credentials.
-- An OpenAI API key when using the OpenAI Realtime Translate engine.
+- An OpenAI API key for the default OpenAI Realtime pipeline.
+- ElevenLabs and Google Cloud Translation credentials only for directions
+  configured as Classic.
 - Headphones, strongly recommended during audio tests.
 
 Do not run hardware audio diagnostics from WSL. PortAudio must access native Windows audio devices.
@@ -132,14 +154,21 @@ Twin Tongue reads these values from `.env`:
 - `ELEVENLABS_API_KEY` for speech-to-text and text-to-speech.
 - `GOOGLE_TRANSLATE_API_KEY` for Google Cloud Translation Basic v2.
 - `GOOGLE_TRANSLATE_PROJECT_ID` as local project metadata only. It is not sent by the translation client.
-- `OPENAI_API_KEY` for the optional OpenAI Realtime Translate engine.
+- `OPENAI_API_KEY` for the OpenAI Realtime Translate pipeline.
 - `OPENAI_SAFETY_IDENTIFIER` optionally supplies a stable pseudonymous end-user identifier.
+
+`ELEVENLABS_API_KEY_NAME` and `OPENAI_API_KEY_NAME` are optional descriptive
+labels retained in the environment template. The runtime does not use them as
+credentials and does not send them to providers.
 
 Never commit or share `.env`. API keys are not written to application logs.
 
 Runtime defaults live in the namespaced schema-v2 `config/default.toml`. Select the immutable startup type for each direction with `pipeline.runtime.<direction>.type`: `classic` or `speech_to_speech`. Classic stages and vendors live below `pipeline.classic`; OpenAI settings live below `pipeline.speech_to_speech`. The control panel displays this selection but cannot change it; restart Twin Tongue after editing the file. See [Configuration namespaces](docs/configuration.md) and [OpenAI Realtime Translate architecture](docs/openai-realtime-translate.md).
 
-The application stores the selected physical input and output devices, interface language, participant languages, and the independent voice gender for each translation direction in `config/preferences.json`. Device preferences use stable endpoint IDs and fall back to the Windows communications defaults while a saved device is unavailable.
+The application stores the selected physical input and output devices, interface
+language, participant languages, and Classic voice gender in
+`config/preferences.json`. Device preferences use stable endpoint IDs and fall
+back to the Windows communications defaults while a saved device is unavailable.
 
 ## Running the application
 
@@ -166,9 +195,24 @@ python .\src\main.py --web-port 9000
 
 Open the control panel at `http://127.0.0.1:8765` when the web server is enabled. Both directions start in passthrough mode by default so audio routing can be validated before translation providers are used. Translation can then be enabled independently for each direction.
 
+With `--pipeline both` (the default), only directions whose
+`pipeline.runtime.<direction>.enabled` value is `true` are started. Explicitly
+requesting a disabled direction is a configuration error.
+
+For OpenAI Realtime, enabling translation arms the direction. The API session is
+opened only after Twin Tongue detects a call application on the corresponding
+VB-CABLE route. Until then the panel shows “waiting for a call application” and
+no audio is sent to OpenAI.
+
 ## VB-CABLE setup
 
-Install and validate the two virtual routes before running the complete application. Follow [VB-CABLE setup and validation](docs/vb-cable-setup.md) for installation, no-code routing tests, cleanup, and troubleshooting.
+Install and validate the two virtual routes before running the complete
+application. See the
+[audio device and routing architecture](docs/audio-routing-architecture.md)
+for the complete calling application → CABLE A → Twin Tongue → CABLE B flow
+and the exact Echo Guard insertion point. Follow
+[VB-CABLE setup and validation](docs/vb-cable-setup.md) for installation,
+no-code routing tests, cleanup, and troubleshooting.
 
 The normal endpoints are:
 
@@ -197,11 +241,24 @@ Tests cover application state, audio buffering and pacing, device discovery, pro
 
 Runtime logs are written asynchronously to `logs/twin-tongue.log`. Rotation size, retained file count, queue capacity, and level are configured in `[observability.logging]`.
 
-Metrics are written to daily `logs/metrics-YYYY-MM-DD.csv` files. They include the selected engine, queue pressure, discarded blocks and segments, callback gaps, output underflows, event-loop lag, recording drops, provider activity, playback latency, VAD, and segmentation counters. Realtime rows also include first translated audio latency, trailing total latency, input/output audio duration, errors, and reconnections.
+When `[observability.metrics].enabled` is `true` (it is `false` by default),
+metrics are written to daily `logs/metrics-YYYY-MM-DD.csv` files. They include the
+selected engine, queue pressure, discarded blocks and segments, callback gaps,
+output underflows, event-loop lag, recording drops, provider activity, playback
+latency, VAD, and segmentation counters. Realtime rows additionally include
+first-audio and trailing latency, input/output duration, send/playback backlog,
+errors, reconnections, and call-session gate state.
 
 Timestamped ElevenLabs transcripts expose word-level `logprob` values. Debug traces record word count, average and minimum log probability, timing, and word data to support analysis of STT false positives.
 
-When `[pipeline.classic.defaults.stt.elevenlabs.audio_capture].enabled` is `true`, diagnostic audio is recorded automatically for each Classic direction using translation. The control panel also provides manual recording controls. Generated audio, logs, and metrics are excluded from source control and distribution packages.
+When `[pipeline.classic.defaults.stt.elevenlabs.audio_capture].enabled` is `true`,
+diagnostic audio is recorded automatically for each translated Classic direction.
+Writes are buffered and flushed once per second to reduce filesystem and antivirus
+overhead. The control panel also provides manual recording controls when at least
+one active direction is Classic. Realtime diagnostic capture writes distinct
+`captured`, `accepted`, `sent`, and `played` tracks with a per-call manifest.
+Generated audio, logs, metrics, and preferences are excluded from source control
+and distribution packages.
 
 ## Building a Windows distribution
 

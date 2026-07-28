@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app_state import ApplicationState, TranslationEngine
 from audio.device_manager import AudioDeviceManager
+from audio.echo_guard import EchoReferenceBus
 from audio.voice_detection import VoiceDetectorLoader
 from engines.openai_realtime import OpenAIRealtimeTranslationFactory
 from metrics import CsvMetricsWriter
@@ -20,7 +21,10 @@ LOGGER = logging.getLogger(__name__)
 
 
 class DirectionalPipelineSupervisor:
-    """Run exactly one engine for a direction and restart only on engine changes."""
+    """Keep one direction alive without allowing it to stop the other direction."""
+
+    RESTART_BASE_DELAY_SECONDS = 0.5
+    RESTART_MAX_DELAY_SECONDS = 5.0
 
     def __init__(
         self,
@@ -30,7 +34,7 @@ class DirectionalPipelineSupervisor:
         pipeline_name: str,
         source_language_name: str,
         target_language_name: str,
-        voice_detector_loader: VoiceDetectorLoader,
+        voice_detector_loader: VoiceDetectorLoader | None,
         control_state: ApplicationState,
         device_manager: AudioDeviceManager,
         duration: float | None = None,
@@ -38,6 +42,7 @@ class DirectionalPipelineSupervisor:
         metrics_writer: CsvMetricsWriter | None = None,
         classic_factory: ProviderFactory | None = None,
         realtime_factory: OpenAIRealtimeTranslationFactory | None = None,
+        echo_reference: EchoReferenceBus | None = None,
     ) -> None:
         self.config = config
         self.env_path = env_path
@@ -52,28 +57,49 @@ class DirectionalPipelineSupervisor:
         self.metrics_writer = metrics_writer
         self._classic_factory = classic_factory
         self._realtime_factory = realtime_factory
+        self.echo_reference = echo_reference or EchoReferenceBus()
 
     async def run(self) -> None:
-        engine = self.control_state.get_engine(self.pipeline_name)
-        try:
-            pipeline = self._build_pipeline(
-                engine,
-                startup_barrier=self.startup_barrier,
-            )
-        except ProviderError as error:
-            LOGGER.error(
-                "event=translation_engine_unavailable engine=%s error=%s",
-                engine.value,
-                error,
-            )
-            await self.control_state.set_pipeline_status(
-                self.pipeline_name, "translation_unavailable"
-            )
-            await asyncio.Event().wait()
-            return
-
-        LOGGER.info("event=translation_engine_started engine=%s", engine.value)
-        await pipeline.run()
+        failures = 0
+        while True:
+            engine = self.control_state.get_engine(self.pipeline_name)
+            try:
+                pipeline = self._build_pipeline(
+                    engine,
+                    startup_barrier=None,
+                )
+                LOGGER.info(
+                    "event=translation_engine_started pipeline=%s engine=%s",
+                    self.pipeline_name,
+                    engine.value,
+                )
+                await pipeline.run()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                failures += 1
+                delay = min(
+                    self.RESTART_MAX_DELAY_SECONDS,
+                    self.RESTART_BASE_DELAY_SECONDS * (2 ** (failures - 1)),
+                )
+                LOGGER.exception(
+                    "event=translation_pipeline_failed pipeline=%s engine=%s "
+                    "error_type=%s retry_in_seconds=%.1f",
+                    self.pipeline_name,
+                    engine.value,
+                    type(error).__name__,
+                    delay,
+                )
+                await self.control_state.set_pipeline_status(
+                    self.pipeline_name,
+                    (
+                        "translation_unavailable"
+                        if isinstance(error, ProviderError)
+                        else "error"
+                    ),
+                )
+                await asyncio.sleep(delay)
 
     def _build_pipeline(
         self,
@@ -82,6 +108,10 @@ class DirectionalPipelineSupervisor:
         startup_barrier: asyncio.Barrier | None,
     ) -> RemoteToAgentPipeline | OpenAIRealtimeTranslatePipeline:
         if engine is TranslationEngine.CLASSIC:
+            if self.voice_detector_loader is None:
+                raise RuntimeError(
+                    "Classic pipeline requires the Silero voice detector loader."
+                )
             if self._classic_factory is None:
                 self._classic_factory = ProviderFactory.from_environment(
                     self.config, self.env_path
@@ -96,6 +126,7 @@ class DirectionalPipelineSupervisor:
                     control_state=self.control_state,
                     device_manager=self.device_manager,
                     metrics_writer=self.metrics_writer,
+                    echo_reference=self.echo_reference,
                 )
             return RemoteToAgentPipeline(
                 config=self.config,
@@ -106,6 +137,7 @@ class DirectionalPipelineSupervisor:
                 control_state=self.control_state,
                 device_manager=self.device_manager,
                 metrics_writer=self.metrics_writer,
+                echo_reference=self.echo_reference,
             )
 
         if self._realtime_factory is None:
@@ -123,4 +155,5 @@ class DirectionalPipelineSupervisor:
             control_state=self.control_state,
             device_manager=self.device_manager,
             metrics_writer=self.metrics_writer,
+            echo_reference=self.echo_reference,
         )

@@ -7,7 +7,11 @@ import unittest
 from unittest.mock import MagicMock, patch
 import wave
 
-from audio.wav_capture import DiagnosticWavCapture, QueuedDiagnosticWavCapture
+from audio.wav_capture import (
+    DiagnosticWavCapture,
+    QueuedDiagnosticWavCapture,
+    repair_incomplete_wav_headers,
+)
 
 
 class DiagnosticWavCaptureTests(unittest.TestCase):
@@ -97,11 +101,11 @@ class DiagnosticWavCaptureTests(unittest.TestCase):
 
                 for _ in range(9):
                     capture.write(bytes(640))
-                writer.writeframesraw.assert_not_called()
+                writer.writeframes.assert_not_called()
 
                 capture.write(bytes(640))
-                writer.writeframesraw.assert_called_once()
-                self.assertEqual(6_400, len(writer.writeframesraw.call_args.args[0]))
+                writer.writeframes.assert_called_once()
+                self.assertEqual(6_400, len(writer.writeframes.call_args.args[0]))
                 capture.close()
 
     def test_queued_capture_writes_named_stream_without_blocking_caller(self) -> None:
@@ -125,6 +129,47 @@ class DiagnosticWavCaptureTests(unittest.TestCase):
                 self.assertEqual(2, wav_file.getnchannels())
                 self.assertEqual(48_000, wav_file.getframerate())
                 self.assertEqual(960, wav_file.getnframes())
+
+    def test_flush_keeps_header_readable_before_graceful_close(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            capture = DiagnosticWavCapture(
+                enabled=True,
+                directory=directory,
+                pipeline_name="agent_to_remote",
+                stream_name="sent",
+                sample_rate=24_000,
+                write_buffer_bytes=960,
+            )
+
+            try:
+                capture.write(bytes(960))
+                path = next(directory.glob("agent_to_remote-sent-*.wav"))
+                with wave.open(str(path), "rb") as wav_file:
+                    self.assertEqual(480, wav_file.getnframes())
+            finally:
+                capture.close()
+
+    def test_repairs_an_interrupted_wav_header_from_payload_size(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            path = directory / "agent_to_remote-sent-interrupted.wav"
+            with wave.open(str(path), "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(24_000)
+                wav_file.writeframes(bytes(4_800))
+            with path.open("r+b") as wav_file:
+                wav_file.seek(4)
+                wav_file.write((996).to_bytes(4, "little"))
+                wav_file.seek(40)
+                wav_file.write((960).to_bytes(4, "little"))
+
+            repaired = repair_incomplete_wav_headers(directory)
+
+            self.assertEqual([path], repaired)
+            with wave.open(str(path), "rb") as wav_file:
+                self.assertEqual(2_400, wav_file.getnframes())
 
 
 if __name__ == "__main__":

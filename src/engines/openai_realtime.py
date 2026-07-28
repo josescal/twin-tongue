@@ -20,6 +20,9 @@ from providers.errors import ProviderConfigurationError, ProviderError
 
 
 LOGGER = logging.getLogger(__name__)
+MAX_WEBSOCKET_MESSAGE_BYTES = 4 * 1024 * 1024
+WEBSOCKET_SEND_TIMEOUT_SECONDS = 2.0
+LEVEL_MEASUREMENT_INTERVAL_BLOCKS = 5
 AudioCallback = Callable[[bytes], Awaitable[None] | None]
 TranscriptCallback = Callable[[str], Awaitable[None] | None]
 
@@ -93,10 +96,14 @@ class OpenAIRealtimeTranslationSession:
         self._receiver_task: asyncio.Task[None] | None = None
         self._session_ready = asyncio.Event()
         self._session_closed = asyncio.Event()
+        self._closing = False
         self._send_lock = asyncio.Lock()
         self._first_input_at: float | None = None
         self._last_input_at: float | None = None
         self._last_output_at: float | None = None
+        self._observed_event_types: set[str] = set()
+        self._input_level_block_count = 0
+        self._output_level_block_count = 0
 
     @property
     def connected(self) -> bool:
@@ -106,30 +113,48 @@ class OpenAIRealtimeTranslationSession:
         """Open and configure one dedicated target-language translation session."""
         if self._connection is not None:
             return
+        if not self.api_key:
+            raise ProviderConfigurationError("OPENAI_API_KEY is missing from .env.")
         if not target_language.strip():
             raise ProviderConfigurationError("Target language must not be empty.")
         self._session_ready.clear()
         self._session_closed.clear()
+        self._closing = False
         self.error_event.clear()
         self.last_error = None
         self._first_input_at = None
         self._last_input_at = None
         self._last_output_at = None
+        self._observed_event_types.clear()
         self.statistics.first_audio_latency_ms = None
         self.statistics.total_latency_ms = None
+        self.statistics.reset_audio_levels()
+        self._input_level_block_count = 0
+        self._output_level_block_count = 0
         headers = {"Authorization": f"Bearer {self.api_key}"}
         if self.safety_identifier:
             headers["OpenAI-Safety-Identifier"] = self.safety_identifier
         url = f"{self.endpoint}?{urlencode({'model': self.model})}"
+        setup_started_at = time.monotonic()
         try:
-            connection = await self._connect_callable(
-                url,
-                additional_headers=headers,
-                compression=None,
-                max_size=None,
-                close_timeout=self.close_timeout_seconds,
+            connection = await asyncio.wait_for(
+                self._connect_callable(
+                    url,
+                    additional_headers=headers,
+                    compression=None,
+                    max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
+                    close_timeout=self.close_timeout_seconds,
+                ),
+                timeout=self.session_setup_timeout_seconds,
             )
-        except BaseException as error:
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError as error:
+            self._record_error(error)
+            raise RealtimeTranslationError(
+                "OpenAI Realtime translation connection timed out."
+            ) from error
+        except Exception as error:
             self._record_error(error)
             raise RealtimeTranslationError(
                 f"Could not connect to OpenAI Realtime translation: {error}"
@@ -144,26 +169,41 @@ class OpenAIRealtimeTranslationSession:
         await self._send_json(
             {
                 "type": "session.update",
-                "session": {"audio": {"output": {"language": target_language}}},
+                "session": {
+                    "audio": {
+                        "input": {
+                            "noise_reduction": {"type": "near_field"}
+                        },
+                        "output": {"language": target_language},
+                    }
+                },
             }
         )
         ready_wait = asyncio.create_task(self._session_ready.wait())
         error_wait = asyncio.create_task(self.error_event.wait())
         try:
+            remaining_setup_seconds = max(
+                0.0,
+                self.session_setup_timeout_seconds
+                - (time.monotonic() - setup_started_at),
+            )
             done, pending = await asyncio.wait(
                 {ready_wait, error_wait},
-                timeout=self.session_setup_timeout_seconds,
+                timeout=remaining_setup_seconds,
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
+            if error_wait in done or self.last_error is not None:
+                raise RealtimeTranslationError(
+                    f"OpenAI Realtime translation setup failed: {self.last_error}"
+                ) from self.last_error
             if ready_wait not in done:
-                if self.last_error is not None:
-                    raise RealtimeTranslationError(
-                        f"OpenAI Realtime translation setup failed: {self.last_error}"
-                    ) from self.last_error
                 raise TimeoutError
+        except asyncio.CancelledError:
+            await self.abort()
+            raise
         except TimeoutError as error:
             self._record_error(error)
             await self.abort()
@@ -182,23 +222,27 @@ class OpenAIRealtimeTranslationSession:
             raise ValueError("PCM16 audio blocks must contain complete samples.")
         if not self.connected:
             raise RealtimeTranslationError("Realtime translation session is not ready.")
-        now = time.monotonic()
-        if self._first_input_at is None:
-            self._first_input_at = now
-        self._last_input_at = now
-        self.statistics.input_pcm_bytes += len(pcm16)
         await self._send_json(
             {
                 "type": "session.input_audio_buffer.append",
                 "audio": base64.b64encode(pcm16).decode("ascii"),
             }
         )
+        now = time.monotonic()
+        if self._first_input_at is None:
+            self._first_input_at = now
+        self._last_input_at = now
+        self.statistics.input_pcm_bytes += len(pcm16)
+        self._input_level_block_count += 1
+        if self._input_level_block_count % LEVEL_MEASUREMENT_INTERVAL_BLOCKS == 1:
+            self.statistics.record_input_level(pcm16)
 
     async def close(self) -> None:
         """Flush translated output with session.close before closing the socket."""
         connection = self._connection
         if connection is None:
             return
+        self._closing = True
         try:
             await self._send_json({"type": "session.close"})
             await asyncio.wait_for(
@@ -213,6 +257,7 @@ class OpenAIRealtimeTranslationSession:
 
     async def abort(self) -> None:
         """Close immediately, cancelling the receiver when graceful drain is impossible."""
+        self._closing = True
         connection, self._connection = self._connection, None
         receiver, self._receiver_task = self._receiver_task, None
         if connection is not None:
@@ -225,6 +270,7 @@ class OpenAIRealtimeTranslationSession:
             receiver.cancel()
             await asyncio.gather(receiver, return_exceptions=True)
         self._session_ready.clear()
+        self._closing = False
 
     async def _send_json(self, payload: dict[str, object]) -> None:
         connection = self._connection
@@ -232,8 +278,13 @@ class OpenAIRealtimeTranslationSession:
             raise RealtimeTranslationError("Realtime translation socket is closed.")
         try:
             async with self._send_lock:
-                await connection.send(json.dumps(payload, separators=(",", ":")))
-        except BaseException as error:
+                await asyncio.wait_for(
+                    connection.send(json.dumps(payload, separators=(",", ":"))),
+                    timeout=WEBSOCKET_SEND_TIMEOUT_SECONDS,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
             self._record_error(error)
             raise RealtimeTranslationError(
                 f"Could not send Realtime translation audio: {error}"
@@ -252,6 +303,12 @@ class OpenAIRealtimeTranslationSession:
                 if not isinstance(event, dict):
                     continue
                 event_type = event.get("type")
+                if isinstance(event_type, str) and event_type not in self._observed_event_types:
+                    self._observed_event_types.add(event_type)
+                    LOGGER.info(
+                        "event=realtime_translation_event_observed type=%s",
+                        event_type,
+                    )
                 if event_type == "session.updated":
                     self._session_ready.set()
                 elif event_type == "session.output_audio.delta":
@@ -266,6 +323,13 @@ class OpenAIRealtimeTranslationSession:
                     await self._invoke(self.on_output_transcript, delta)
                 elif event_type == "session.closed":
                     self._session_closed.set()
+                    self._session_ready.clear()
+                    if not self._closing:
+                        self._record_error(
+                            RealtimeTranslationError(
+                                "OpenAI Realtime translation session closed unexpectedly."
+                            )
+                        )
                     return
                 elif event_type == "error":
                     detail = event.get("error")
@@ -293,6 +357,9 @@ class OpenAIRealtimeTranslationSession:
         if self._last_input_at is not None:
             self.statistics.total_latency_ms = (now - self._last_input_at) * 1000
         self.statistics.output_pcm_bytes += len(pcm16)
+        self._output_level_block_count += 1
+        if self._output_level_block_count % LEVEL_MEASUREMENT_INTERVAL_BLOCKS == 1:
+            self.statistics.record_output_level(pcm16)
         await self._invoke(self.on_audio, pcm16)
 
     def _record_error(self, error: BaseException) -> None:
@@ -335,8 +402,6 @@ class OpenAIRealtimeTranslationFactory:
         self._config = config
         self._api_key = api_key
         self._safety_identifier = safety_identifier
-        # Validate eagerly without opening a network connection.
-        self.create()
 
     @classmethod
     def from_environment(

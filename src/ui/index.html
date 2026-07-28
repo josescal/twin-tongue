@@ -51,6 +51,16 @@
     .settings-panel .device-field { padding: 8px 9px; }
     .settings-panel .device-field label { font-size: .74rem; }
     .settings-panel select { padding: 6px 7px; font-size: .75rem; }
+    .audio-test-row { display: grid; gap: 7px; padding: 9px; border: 1px solid #d9dde5; border-radius: 9px; background: #fff; }
+    .audio-test-heading { display: grid; gap: 8px; }
+    .audio-test-copy { display: grid; gap: 2px; }
+    .audio-test-copy strong { color: #343d4e; font-size: .75rem; }
+    .audio-test-copy span { color: #687386; font-size: .68rem; line-height: 1.35; }
+    .audio-test-button { justify-self: start; min-width: 92px; border: 1px solid #b9c2cf; padding: 6px 9px; background: #f7f8fa; color: #343d4e; font-size: .72rem; }
+    .audio-test-button:hover { border-color: #25a765; background: #f2fbf6; color: #12673d; }
+    .audio-test-result { min-height: 1em; color: #687386; font-size: .68rem; line-height: 1.35; }
+    .audio-test-result.success { color: #12673d; font-weight: 650; }
+    .audio-test-result.warning { color: #b54708; font-weight: 650; }
     .voice-selector { display: grid; gap: 7px; margin: 0; padding: 8px 9px; border: 1px solid #e3e6eb; border-radius: 9px; background: #fff; }
     .engine-info { display: grid; gap: 3px; margin-top: 9px; padding: 8px 9px; border: 1px solid #e3e6eb; border-radius: 9px; background: #f8fafb; }
     .engine-info-label { color: #606a7c; font-size: .72rem; font-weight: 650; }
@@ -71,6 +81,7 @@
     .audio-recording.active .recording-button { border-color: #f4b4ae; color: #b42318; }
     .card { padding: 13px; }
     .choice { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border-radius: 9px; background: #f0f2f5; gap: 3px; }
+    .pipeline-status { margin-top: 7px; padding: 7px 9px; border-radius: 8px; background: #fff7e8; color: #92400e; font-size: .75rem; font-weight: 650; }
     .pipeline-gate { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 8px 10px; border-radius: 8px; background: #f5f7f9; color: #687386; font-size: .8rem; font-weight: 650; }
     .pipeline-gate.failed { background: #fff4ed; color: #b54708; }
     .spinner { width: 16px; height: 16px; flex: 0 0 auto; border: 2px solid #ccd2da; border-top-color: #25a765; border-radius: 50%; animation: spin .8s linear infinite; }
@@ -182,6 +193,7 @@
               <div class="choice" hidden>
                 <button data-mode="translate" data-i18n="translated">Translated</button><button data-mode="passthrough" data-i18n="untranslated">Untranslated</button>
               </div>
+              <div class="pipeline-status" aria-live="polite" hidden></div>
               <div class="engine-info">
                 <span class="engine-info-label" data-i18n="translationEngine">Translation engine</span>
                 <strong class="engine-info-value" data-engine-value></strong>
@@ -200,6 +212,7 @@
               <div class="choice" hidden>
                 <button data-mode="translate" data-i18n="translated">Translated</button><button data-mode="passthrough" data-i18n="untranslated">Untranslated</button>
               </div>
+              <div class="pipeline-status" aria-live="polite" hidden></div>
               <div class="engine-info">
                 <span class="engine-info-label" data-i18n="translationEngine">Translation engine</span>
                 <strong class="engine-info-value" data-engine-value></strong>
@@ -248,6 +261,16 @@
             <label for="agent-input-device" data-i18n="micLabel">Your microphone is:</label>
             <select id="agent-input-device" class="device-select" data-audio-direction="input"></select>
             <div class="device-status" aria-live="polite" hidden></div>
+          </div>
+          <div class="audio-test-row">
+            <div class="audio-test-heading">
+              <div class="audio-test-copy">
+                <strong data-i18n="audioPathTestTitle">Physical audio path</strong>
+                <span data-i18n="audioPathTestHelp">Outside a call, start the test and speak when recording begins. Click again to stop and listen. Recording stops automatically after 10 seconds.</span>
+              </div>
+              <button id="audio-test-button" class="audio-test-button" type="button" data-i18n="testAudioPath" disabled>Test audio</button>
+            </div>
+            <span id="audio-test-result" class="audio-test-result" aria-live="polite"></span>
           </div>
         </aside>
       </div>
@@ -312,13 +335,13 @@
         eyebrow: "Control panel", connecting: "Connecting...", connected: "Connected", reconnecting: "Disconnected",
         tabControl: "Control", tabTranscription: "Transcription", tabHelp: "Help",
         remoteLanguage: "Other person's language", agentLanguage: "Your language", settingsTitle: "Configuration", translationEngine: "Translation engine", classicEngine: "Classic (STT + translation + TTS)", openaiRealtimeEngine: "OpenAI Realtime Translate", remoteVoiceLegend: "Translated voice you hear", agentVoiceLegend: "Translated voice the other person hears", male: "Male", female: "Female",
-        speakerLabel: "Your speakers or headphones are:", micLabel: "Your microphone is:",
+        speakerLabel: "Your speakers or headphones are:", micLabel: "Your microphone is:", audioPathTestTitle: "Physical audio path", audioPathTestHelp: "Outside a call, start the test and speak when recording begins. Click again to stop and listen. Recording stops automatically after 10 seconds.", testAudioPath: "Test audio", stopAudioTest: "Stop and listen", audioTestStartsIn: "Recording starts in", recordingAudio: "Recording — speak now", playingAudio: "Recording complete — playing the pipeline mono audio...", audioTestPassed: "Signal and conversion validated. Confirm that you heard the playback clearly.", audioTestNoSignal: "No usable microphone signal was detected.", audioTestLowSignal: "The microphone signal is too low.", audioTestCancellation: "The stereo channels cancel each other during the pipeline downmix.", audioTestClipping: "The microphone signal is clipping.", audioTestImbalance: "The two microphone channels have a large level difference.", audioTestFailed: "Audio test failed.", capturedLevel: "Captured", downmixedLevel: "Downmixed mono", monitorPlayback: "headphone playback", echoGuardDisabled: "Echo Guard disabled",
         remotePipelineTitle: "Audio you hear", agentPipelineTitle: "Audio the other person hears", loadingOriginal: "Loading system... Original audio is active.",
         translated: "Translated", untranslated: "Untranslated", bothDirectionsTitle: "Two-way translation", bothDirectionsHelp: "Apply the same mode to both sides of the conversation.", enableBothDirections: "Translate both ways", disableBothDirections: "Use original audio both ways",
         callConnections: "Call connections", callSpeaker: "Call speaker", callMic: "Call microphone",
         transcriptionTitle: "Conversation transcription", transcriptionDescription: "Recognized and translated phrases from both sides of the conversation.", clear: "Clear",
         emptyTranscription: "Phrases will appear here when translation is active and either person starts speaking.",
-        recordingTitle: "Diagnostic recording", recordingReady: "Ready for a manual recording.", recordingAutomatic: "Recording automatically while translation is active.", recordingManual: "Manual recording is active.", startRecording: "Start recording", stopRecording: "Stop recording", recordingFailed: "Could not change audio recording.",
+        recordingTitle: "Diagnostic recording", recordingReady: "Ready for a manual recording.", recordingAutomatic: "Recording automatically during an active translated call.", recordingManual: "Manual recording is active.", startRecording: "Start recording", stopRecording: "Stop recording", recordingFailed: "Could not change audio recording.",
         helpTitle: "How to use Twin Tongue", helpIntro: "The panel lets you decide which audio is translated during a call and verify what the tool understood when you speak.", version: "Version",
         beforeStartTitle: "Before you start", beforeStart1: "Check that the panel says Connected.", beforeStart2: "Select your language and the other person's language.", beforeStart3: "Choose a male or female voice for translation.", beforeStart4: "Start the call and check that the application appears in both connections.",
         conversationControlTitle: "Conversation control", conversationControl1: "Audio you hear controls whether the other person reaches you translated or unchanged.", conversationControl2: "Audio the other person hears controls whether your voice reaches them translated or unchanged.", conversationControl3: "When you enable translation, wait until the panel says Ready.", conversationControl4: "If translation is not available, original audio remains active.",
@@ -326,8 +349,8 @@
         reviewTitle: "Review transcription", reviewText: "The Transcription tab shows what Twin Tongue understood and translated for both people. Use it to detect unclear words, repeat a phrase, or explain an idea differently.",
         noticeTitle: "Keep in mind", noticeText: "Transcription and translation can contain errors, especially with noise, names, strong accents, or very fast speech. Translation also takes a few seconds because the system must listen, interpret, translate, and play the phrase.",
         labels: { translate: "translated audio", passthrough: "untranslated audio" },
-        savedDeviceUnavailable: "The saved device is unavailable:", usingFallbackDevice: "Using instead:",
-        statusLabels: { starting: "Preparing audio...", system_loading: "Loading system - original audio active", switching: "Applying change...", initializing: "Preparing translation...", reconnecting: "Reconnecting translation - original audio active", translation_unavailable: "Translation unavailable - original audio active", translation_ready: "Ready: you can start speaking", passthrough: "untranslated audio", error: "Audio setup error" },
+        savedDeviceUnavailable: "The saved device is unavailable:", discardedDevice: "The selected device is not responding and has been temporarily discarded:", usingFallbackDevice: "Using instead:", deviceNotResponding: "not responding",
+        statusLabels: { starting: "Preparing audio...", system_loading: "Loading system - original audio active", switching: "Applying change...", initializing: "Preparing translation...", reconnecting: "Reconnecting translation - original audio active", waiting_for_call: "Translation enabled — waiting for a call application", translation_unavailable: "Translation unavailable - original audio active", translation_ready: "Ready: you can start speaking", passthrough: "untranslated audio", error: "Audio setup error" },
         languages: { en: "English", es: "Spanish", fr: "French", ca: "Catalan" },
         noDevice: "No audio device available", noAudioDevice: "No audio device is available", automaticDevice: "Automatic (Windows communications device)", defaultDevice: "default", savedDeviceSelection: "saved selection", cableUnavailable: "Cable unavailable", callApplicationDisconnected: "No call application connected", checkVbCable: "Check the VB-CABLE installation.", selectCableA: "Select CABLE A as the speaker in the call application.", selectCableB: "Select CABLE B as the microphone in the call application.", noConnectedApp: "No connected application", appConnected: "Application connected to this cable", processDisconnectedDetail: "The Twin Tongue process is disconnected. Audio, translation, and recording are stopped.", recordingDisconnected: "Recording stopped: process disconnected.",
         audioNotStarted: "Audio not started", remoteSpeaker: "Other person", agentSpeaker: "You", remoteSaid: "Other person said", agentHears: "You hear", agentSaid: "You said", remoteHears: "Other person hears", paragraphMeta: "Paragraph", segmentsMeta: "segments", notTranslated: "It was not translated.", translating: "Translating...", clearFailed: "Could not clear transcription.", languageFailed: "Could not change the language.", uiLanguageFailed: "Could not change the interface language.", voiceFailed: "Could not change the voice.", deviceFailed: "Could not change the audio device.", modeFailed: "Could not change the mode.", translationFailedDetail: "Translation could not be prepared. Original audio remains active."
@@ -336,13 +359,13 @@
         eyebrow: "Panel de control", connecting: "Conectando...", connected: "Conectado", reconnecting: "Sin conexión",
         tabControl: "Control", tabTranscription: "Transcripción", tabHelp: "Ayuda",
         remoteLanguage: "Idioma de la otra persona", agentLanguage: "Tu idioma", settingsTitle: "Configuración", translationEngine: "Motor de traducción", classicEngine: "Clásico (STT + traducción + TTS)", openaiRealtimeEngine: "OpenAI Realtime Translate", remoteVoiceLegend: "Voz traducida que escuchas", agentVoiceLegend: "Voz traducida que escucha la otra persona", male: "Hombre", female: "Mujer",
-        speakerLabel: "Tus altavoces o auriculares son:", micLabel: "Tu micrófono es:",
+        speakerLabel: "Tus altavoces o auriculares son:", micLabel: "Tu micrófono es:", audioPathTestTitle: "Ruta de audio física", audioPathTestHelp: "Fuera de una llamada, inicia la prueba y habla cuando comience la grabación. Pulsa de nuevo para parar y escuchar. La grabación se detiene automáticamente a los 10 segundos.", testAudioPath: "Probar audio", stopAudioTest: "Parar y escuchar", audioTestStartsIn: "La grabación empieza en", recordingAudio: "Grabando — habla ahora", playingAudio: "Grabación terminada — reproduciendo el audio mono del pipeline...", audioTestPassed: "Señal y conversión validadas. Confirma que has oído la reproducción con claridad.", audioTestNoSignal: "No se ha detectado una señal de micrófono utilizable.", audioTestLowSignal: "La señal del micrófono es demasiado baja.", audioTestCancellation: "Los canales estéreo se cancelan al aplicar el downmix del pipeline.", audioTestClipping: "La señal del micrófono está saturando.", audioTestImbalance: "Los dos canales del micrófono tienen una diferencia de nivel elevada.", audioTestFailed: "La prueba de audio ha fallado.", capturedLevel: "Capturado", downmixedLevel: "Mono tras downmix", monitorPlayback: "reproducción en auriculares", echoGuardDisabled: "Echo Guard desactivado",
         remotePipelineTitle: "Audio que escuchas tú", agentPipelineTitle: "Audio que escucha la otra persona", loadingOriginal: "Cargando el sistema... El audio original está activo.",
         translated: "Traducido", untranslated: "Sin traducir", bothDirectionsTitle: "Traducción en ambos sentidos", bothDirectionsHelp: "Aplica el mismo modo a los dos sentidos de la conversación.", enableBothDirections: "Traducir en ambos sentidos", disableBothDirections: "Usar audio original en ambos sentidos",
         callConnections: "Conexiones de la llamada", callSpeaker: "Altavoz de la llamada", callMic: "Micrófono de la llamada",
         transcriptionTitle: "Transcripción de la conversación", transcriptionDescription: "Frases reconocidas y traducidas de los dos interlocutores.", clear: "Limpiar",
         emptyTranscription: "Las frases aparecerán aquí cuando la traducción esté activa y cualquiera de los dos empiece a hablar.",
-        recordingTitle: "Grabación de diagnóstico", recordingReady: "Lista para iniciar una grabación manual.", recordingAutomatic: "Grabando automáticamente mientras la traducción está activa.", recordingManual: "La grabación manual está activa.", startRecording: "Iniciar grabación", stopRecording: "Detener grabación", recordingFailed: "No se pudo cambiar la grabación de audio.",
+        recordingTitle: "Grabación de diagnóstico", recordingReady: "Lista para iniciar una grabación manual.", recordingAutomatic: "Grabando automáticamente durante una llamada traducida activa.", recordingManual: "La grabación manual está activa.", startRecording: "Iniciar grabación", stopRecording: "Detener grabación", recordingFailed: "No se pudo cambiar la grabación de audio.",
         helpTitle: "Cómo usar Twin Tongue", helpIntro: "El panel te permite decidir qué audio se traduce durante una llamada y comprobar lo que la herramienta ha entendido cuando hablas.", version: "Versión",
         beforeStartTitle: "Antes de empezar", beforeStart1: "Comprueba que el panel indique Conectado.", beforeStart2: "Selecciona tu idioma y el de la otra persona.", beforeStart3: "Elige voz de hombre o mujer para la traducción.", beforeStart4: "Inicia la llamada y comprueba que la aplicación aparezca en las dos conexiones.",
         conversationControlTitle: "Control de la conversación", conversationControl1: "Audio que escuchas tú controla si recibes a la otra persona traducida o sin cambios.", conversationControl2: "Audio que escucha la otra persona controla si tu voz llega traducida o sin cambios.", conversationControl3: "Cuando actives la traducción, espera hasta que el panel indique Listo.", conversationControl4: "Si la traducción no está disponible, el audio original permanece activo.",
@@ -350,8 +373,8 @@
         reviewTitle: "Revisar la transcripción", reviewText: "La pestaña Transcripción muestra lo que Twin Tongue ha entendido y traducido para ambos interlocutores. Úsala para detectar palabras confusas, repetir una frase o explicar una idea de otra manera.",
         noticeTitle: "Ten en cuenta", noticeText: "La transcripción y la traducción pueden contener errores, especialmente con ruido, nombres propios, acentos marcados o habla muy rápida. La traducción también necesita unos segundos porque el sistema debe escuchar, interpretar, traducir y reproducir la frase.",
         labels: { translate: "el audio traducido", passthrough: "el audio sin traducir" },
-        savedDeviceUnavailable: "El dispositivo guardado no está disponible:", usingFallbackDevice: "Se está usando:",
-        statusLabels: { starting: "Preparando el audio...", system_loading: "Cargando el sistema - audio original activo", switching: "Aplicando el cambio...", initializing: "Preparando la traducción...", reconnecting: "Reconectando la traducción - audio original activo", translation_unavailable: "Traducción no disponible - audio original activo", translation_ready: "Listo: puedes empezar a hablar", passthrough: "el audio sin traducir", error: "Error al preparar el audio" },
+        savedDeviceUnavailable: "El dispositivo guardado no está disponible:", discardedDevice: "El dispositivo seleccionado no responde y se ha descartado temporalmente:", usingFallbackDevice: "Se está usando:", deviceNotResponding: "no responde",
+        statusLabels: { starting: "Preparando el audio...", system_loading: "Cargando el sistema - audio original activo", switching: "Aplicando el cambio...", initializing: "Preparando la traducción...", reconnecting: "Reconectando la traducción - audio original activo", waiting_for_call: "Traducción activada — esperando una aplicación de llamada", translation_unavailable: "Traducción no disponible - audio original activo", translation_ready: "Listo: puedes empezar a hablar", passthrough: "el audio sin traducir", error: "Error al preparar el audio" },
         languages: { en: "Inglés", es: "Español", fr: "Francés", ca: "Catalán" },
         noDevice: "Ningún dispositivo disponible", noAudioDevice: "No hay ningún dispositivo de audio disponible", automaticDevice: "Automático (dispositivo de comunicaciones de Windows)", defaultDevice: "predeterminado", savedDeviceSelection: "selección guardada", cableUnavailable: "Cable no disponible", callApplicationDisconnected: "Ninguna aplicación de llamada conectada", checkVbCable: "Comprueba la instalación de VB-CABLE.", selectCableA: "Selecciona CABLE A como altavoz en la aplicación de llamada.", selectCableB: "Selecciona CABLE B como micrófono en la aplicación de llamada.", noConnectedApp: "Ninguna aplicación conectada", appConnected: "Aplicación conectada a este cable", processDisconnectedDetail: "El proceso de Twin Tongue está desconectado. El audio, la traducción y la grabación están detenidos.", recordingDisconnected: "Grabación detenida: proceso desconectado.",
         audioNotStarted: "Audio no iniciado", remoteSpeaker: "Otra persona", agentSpeaker: "Tú", remoteSaid: "La otra persona ha dicho", agentHears: "Tú escuchas", agentSaid: "Has dicho", remoteHears: "La otra persona escucha", paragraphMeta: "Párrafo", segmentsMeta: "segmentos", notTranslated: "No llegó a traducirse.", translating: "Traduciendo...", clearFailed: "No se pudo limpiar la transcripción.", languageFailed: "No se pudo cambiar el idioma.", uiLanguageFailed: "No se pudo cambiar el idioma de la interfaz.", voiceFailed: "No se pudo cambiar la voz.", deviceFailed: "No se pudo cambiar el dispositivo de audio.", modeFailed: "No se pudo cambiar el modo.", translationFailedDetail: "No se pudo preparar la traducción. El audio original sigue activo."
@@ -360,6 +383,10 @@
     let currentState = null;
     let uiLanguage = "en";
     let connectionOnline = false;
+    let audioTestRunning = false;
+    let audioTestRecording = false;
+    let audioTestStopRequested = false;
+    let stopAudioTestTimer = () => {};
     const connection = document.querySelector("#connection");
     const errorBox = document.querySelector("#error");
 
@@ -382,6 +409,7 @@
         gate.hidden = false;
         gate.classList.add("failed");
         gate.querySelector("span:last-child").textContent = t("processDisconnectedDetail");
+        card.querySelector(".pipeline-status").hidden = true;
       }
       const masterButton = document.querySelector("#all-translation-button");
       masterButton.disabled = true;
@@ -441,17 +469,32 @@
           select.replaceChildren();
           select.add(new Option(t("automaticDevice"), "automatic"));
           for (const available of device.devices || []) {
-            const suffix = available.default_communications ? ` (${t("defaultDevice")})` : "";
+            const labels = [];
+            if (available.default_communications) labels.push(t("defaultDevice"));
+            if (available.healthy === false) labels.push(t("deviceNotResponding"));
+            const suffix = labels.length ? ` (${labels.join(", ")})` : "";
             select.add(new Option(`${available.name}${suffix}`, available.id));
           }
           if (device.mode === "manual" && !device.preferred_available) {
             select.add(new Option(`${device.preferred_name || device.selection} (${t("savedDeviceSelection")})`, device.selection));
           }
-          select.value = device.selection || "automatic";
+          select.value = device.fallback_active && device.active_id
+            ? device.active_id
+            : device.selection || "automatic";
           const status = select.closest(".device-field").querySelector(".device-status");
           status.textContent = "";
           status.classList.remove("warning", "info");
-          if (device.mode === "manual" && !device.preferred_available) {
+          const discardedDevices = device.discarded_devices || [];
+          if (device.fallback_active || discardedDevices.length) {
+            const discarded = discardedDevices
+              .map(item => item.name)
+              .join(", ");
+            const fallback = device.active_name
+              ? `${t("usingFallbackDevice")} ${device.active_name}.`
+              : t("noAudioDevice");
+            status.textContent = `${t("discardedDevice")} ${discarded}. ${fallback}`;
+            status.classList.add("warning");
+          } else if (device.mode === "manual" && !device.preferred_available) {
             const preferred = device.preferred_name || device.selection;
             const fallback = device.active_name
               ? `${t("usingFallbackDevice")} ${device.active_name}.`
@@ -463,8 +506,16 @@
             status.classList.add("warning");
           }
           status.hidden = !status.textContent;
-          select.disabled = false;
+          select.disabled = audioTestRunning;
         }
+        const inputReady = Boolean(state.audio_devices.input?.active_name);
+        const outputReady = Boolean(state.audio_devices.output?.active_name);
+        const audioTestButton = document.querySelector("#audio-test-button");
+        audioTestButton.disabled =
+          audioTestStopRequested ||
+          (audioTestRunning && !audioTestRecording) ||
+          !inputReady ||
+          !outputReady;
       }
       renderRoutes(state);
       renderPipelines(state);
@@ -541,14 +592,27 @@
       for (const [name, pipeline] of Object.entries(state.pipelines)) {
         const card = document.querySelector(`[data-pipeline="${name}"]`);
         if (!card) continue;
-        const controlsReady = pipeline.running && ["passthrough", "translation_ready"].includes(pipeline.status);
+        const waitingForCall = pipeline.waiting_for_call === true || pipeline.status === "waiting_for_call";
+        const controlsReady = pipeline.running && (
+          pipeline.engine === "openai_realtime"
+          || ["passthrough", "waiting_for_call", "translation_ready"].includes(pipeline.status)
+        );
         const choice = card.querySelector(".choice");
         const gate = card.querySelector(".pipeline-gate");
+        const status = card.querySelector(".pipeline-status");
         const failed = ["translation_unavailable", "error"].includes(pipeline.status);
         choice.hidden = !controlsReady;
         gate.hidden = controlsReady || !pipeline.running;
         gate.classList.toggle("failed", failed);
         gate.querySelector("span:last-child").textContent = failed ? t("translationFailedDetail") : t("loadingOriginal");
+        const visibleStatus = waitingForCall ? "waiting_for_call" : pipeline.status;
+        const showStatus = pipeline.running && (
+          pipeline.mode === "translate" || failed || !controlsReady
+        );
+        status.hidden = !showStatus;
+        status.textContent = showStatus
+          ? (translations[uiLanguage].statusLabels[visibleStatus] || visibleStatus)
+          : "";
         const engineValue = card.querySelector("[data-engine-value]");
         engineValue.textContent = t(
           pipeline.engine === "openai_realtime" ? "openaiRealtimeEngine" : "classicEngine"
@@ -564,7 +628,10 @@
       const runningPipelines = Object.values(state.pipelines).filter(pipeline => pipeline.running);
       const bothRunning = runningPipelines.length === 2;
       const bothTranslated = bothRunning && runningPipelines.every(pipeline => pipeline.mode === "translate");
-      const controlsReady = bothRunning && runningPipelines.every(pipeline => ["passthrough", "translation_ready"].includes(pipeline.status));
+      const controlsReady = bothRunning && runningPipelines.every(pipeline => (
+        pipeline.engine === "openai_realtime"
+        || ["passthrough", "waiting_for_call", "translation_ready"].includes(pipeline.status)
+      ));
       masterButton.dataset.mode = bothTranslated ? "passthrough" : "translate";
       masterButton.textContent = bothTranslated ? t("disableBothDirections") : t("enableBothDirections");
       masterButton.setAttribute("aria-pressed", String(bothTranslated));
@@ -759,6 +826,9 @@
     async function setAudioDevice(direction, selection) {
       errorBox.textContent = "";
       const select = document.querySelector(`select[data-audio-direction="${direction}"]`);
+      const testResult = document.querySelector("#audio-test-result");
+      testResult.textContent = "";
+      testResult.className = "audio-test-result";
       select.disabled = true;
       try {
         const response = await fetch(`/api/audio-devices/${direction}`, {
@@ -812,6 +882,116 @@
       }
     }
 
+    function wait(milliseconds) {
+      return new Promise(resolve => setTimeout(resolve, milliseconds));
+    }
+
+    async function showAudioTestPreparation(result, seconds) {
+      for (let remaining = seconds; remaining > 0; remaining -= 1) {
+        result.textContent = `${t("audioTestStartsIn")} ${remaining} s`;
+        await wait(1000);
+      }
+    }
+
+    function startAudioRecordingTimer(result, maximumSeconds) {
+      const startedAt = performance.now();
+      let timer = null;
+      const update = () => {
+        const elapsed = Math.min(
+          maximumSeconds,
+          (performance.now() - startedAt) / 1000
+        );
+        if (elapsed < maximumSeconds) {
+          result.textContent = `${t("recordingAudio")} · ${elapsed.toFixed(1)} s`;
+          return;
+        }
+        result.textContent = t("playingAudio");
+        if (timer !== null) clearInterval(timer);
+      };
+      update();
+      timer = setInterval(update, 100);
+      return () => {
+        if (timer !== null) clearInterval(timer);
+      };
+    }
+
+    async function stopPhysicalAudioPathRecording() {
+      if (!audioTestRecording || audioTestStopRequested) return;
+      const button = document.querySelector("#audio-test-button");
+      const result = document.querySelector("#audio-test-result");
+      audioTestStopRequested = true;
+      stopAudioTestTimer();
+      button.disabled = true;
+      result.textContent = t("playingAudio");
+      try {
+        await fetch("/api/audio-test/stop", { method: "POST" });
+      } finally {
+        audioTestRecording = false;
+      }
+    }
+
+    async function testPhysicalAudioPath() {
+      if (audioTestRecording) {
+        await stopPhysicalAudioPathRecording();
+        return;
+      }
+      errorBox.textContent = "";
+      const button = document.querySelector("#audio-test-button");
+      const result = document.querySelector("#audio-test-result");
+      const deviceSelectors = document.querySelectorAll("select[data-audio-direction]");
+      audioTestRunning = true;
+      button.disabled = true;
+      deviceSelectors.forEach(select => select.disabled = true);
+      result.className = "audio-test-result";
+      try {
+        await showAudioTestPreparation(result, 3);
+        if (!connectionOnline) throw new Error(t("audioTestFailed"));
+        audioTestRecording = true;
+        button.dataset.i18n = "stopAudioTest";
+        button.textContent = t("stopAudioTest");
+        button.disabled = false;
+        stopAudioTestTimer = startAudioRecordingTimer(result, 10);
+        const response = await fetch("/api/audio-test", { method: "POST" });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || t("audioTestFailed"));
+        const assessmentMessages = {
+          passed: t("audioTestPassed"),
+          no_signal: t("audioTestNoSignal"),
+          low_signal: t("audioTestLowSignal"),
+          downmix_cancellation: t("audioTestCancellation"),
+          clipping: t("audioTestClipping"),
+          channel_imbalance: t("audioTestImbalance")
+        };
+        const channelLevels = (payload.channel_levels || [])
+          .map(level => `CH${level.channel} RMS ${level.rms_dbfs} dBFS / peak ${level.peak_dbfs} dBFS`)
+          .join(" · ");
+        const mono = payload.downmixed_level || {};
+        const format =
+          `${payload.sample_rate} Hz · ${payload.captured_channels}→${payload.pipeline_channels} ch · ` +
+          `${t("monitorPlayback")} ${payload.playback_channels} ch · ${t("echoGuardDisabled")}`;
+        result.textContent =
+          `${assessmentMessages[payload.assessment] || t("audioTestFailed")} ` +
+          `${t("capturedLevel")}: ${channelLevels}. ` +
+          `${t("downmixedLevel")}: RMS ${mono.rms_dbfs} dBFS / peak ${mono.peak_dbfs} dBFS. ${format}`;
+        result.classList.add(payload.passed ? "success" : "warning");
+      } catch (error) {
+        result.textContent = error.message;
+        result.classList.add("warning");
+      } finally {
+        stopAudioTestTimer();
+        stopAudioTestTimer = () => {};
+        audioTestRunning = false;
+        audioTestRecording = false;
+        audioTestStopRequested = false;
+        button.dataset.i18n = "testAudioPath";
+        button.textContent = t("testAudioPath");
+        deviceSelectors.forEach(select => select.disabled = false);
+        const inputReady = Boolean(currentState?.audio_devices?.input?.active_name);
+        const outputReady = Boolean(currentState?.audio_devices?.output?.active_name);
+        button.disabled = !inputReady || !outputReady;
+      }
+    }
+
     async function setAudioRecording(active) {
       errorBox.textContent = "";
       const button = document.querySelector("#recording-button");
@@ -841,6 +1021,7 @@
     document.querySelectorAll("select[data-audio-direction]").forEach(select => {
       select.addEventListener("change", () => setAudioDevice(select.dataset.audioDirection, select.value));
     });
+    document.querySelector("#audio-test-button").addEventListener("click", testPhysicalAudioPath);
     document.querySelectorAll("[data-ui-language]").forEach(button => {
       button.addEventListener("click", () => setUiLanguage(button.dataset.uiLanguage));
     });

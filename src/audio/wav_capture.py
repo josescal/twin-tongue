@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from queue import Empty, Full, Queue
 import re
+import struct
 from threading import Lock, Thread
 import time
 from typing import TextIO
@@ -18,6 +19,66 @@ _CLOSE_SESSION = object()
 _SHUTDOWN = object()
 DEFAULT_WRITE_BUFFER_BYTES = 64 * 1024
 DEFAULT_FLUSH_INTERVAL_SECONDS = 0.5
+
+
+def repair_incomplete_wav_headers(directory: Path) -> list[Path]:
+    """Repair stale PCM WAV sizes left behind by an interrupted process."""
+    repaired: list[Path] = []
+    if not directory.exists():
+        return repaired
+    for path in directory.glob("*.wav"):
+        try:
+            if _repair_wav_header(path):
+                repaired.append(path)
+                logger.warning(
+                    "event=diagnostic_wav_header_repaired file=%s",
+                    path,
+                )
+        except (OSError, ValueError):
+            logger.exception(
+                "event=diagnostic_wav_header_repair_failed file=%s",
+                path,
+            )
+    return repaired
+
+
+def _repair_wav_header(path: Path) -> bool:
+    size = path.stat().st_size
+    if size < 44:
+        return False
+    with path.open("r+b") as wav_file:
+        header = wav_file.read(min(size, 4096))
+        if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
+            raise ValueError(f"{path} is not a RIFF/WAVE file.")
+        offset = 12
+        data_size_offset: int | None = None
+        data_start: int | None = None
+        declared_data_size = 0
+        while offset + 8 <= len(header):
+            chunk_id = header[offset : offset + 4]
+            chunk_size = struct.unpack_from("<I", header, offset + 4)[0]
+            if chunk_id == b"data":
+                data_size_offset = offset + 4
+                data_start = offset + 8
+                declared_data_size = chunk_size
+                break
+            offset += 8 + chunk_size + (chunk_size % 2)
+        if data_size_offset is None or data_start is None:
+            raise ValueError(f"{path} has no readable data chunk.")
+        actual_data_size = size - data_start
+        declared_riff_size = struct.unpack_from("<I", header, 4)[0]
+        actual_riff_size = size - 8
+        if (
+            declared_data_size == actual_data_size
+            and declared_riff_size == actual_riff_size
+        ):
+            return False
+        wav_file.seek(4)
+        wav_file.write(struct.pack("<I", actual_riff_size))
+        wav_file.seek(data_size_offset)
+        wav_file.write(struct.pack("<I", actual_data_size))
+        wav_file.flush()
+        return True
 
 
 class DiagnosticWavCapture:
@@ -37,6 +98,7 @@ class DiagnosticWavCapture:
         write_timing_marks: bool = True,
         write_buffer_bytes: int = DEFAULT_WRITE_BUFFER_BYTES,
         flush_interval_seconds: float = DEFAULT_FLUSH_INTERVAL_SECONDS,
+        session_id: str | None = None,
     ) -> None:
         if sample_rate <= 0:
             raise ValueError("WAV capture sample rate must be greater than zero.")
@@ -61,7 +123,7 @@ class DiagnosticWavCapture:
         self._write_timing_marks = write_timing_marks
         self._write_buffer_bytes = write_buffer_bytes
         self._flush_interval_seconds = flush_interval_seconds
-        self._timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self._timestamp = session_id or datetime.now().strftime("%Y%m%d-%H%M%S")
         self._file_index = 0
         self._frames_written = 0
         self._writer: wave.Wave_write | None = None
@@ -70,11 +132,16 @@ class DiagnosticWavCapture:
         self._marks_buffer: list[str] = []
         self._last_buffer_flush_monotonic = time.monotonic()
         self._last_write_monotonic: float | None = None
+        self._files: list[Path] = []
 
     @property
     def enabled(self) -> bool:
         """Return whether the capture will write audio."""
         return self._enabled
+
+    @property
+    def files(self) -> tuple[Path, ...]:
+        return tuple(self._files)
 
     def write(self, pcm: bytes) -> None:
         """Append one PCM block to the current WAV file."""
@@ -124,7 +191,12 @@ class DiagnosticWavCapture:
     def flush(self) -> None:
         """Write accumulated PCM and timing marks in filesystem-friendly batches."""
         if self._writer is not None and self._pcm_buffer:
-            self._writer.writeframesraw(bytes(self._pcm_buffer))
+            # writeframes() patches RIFF/data lengths on every flush. A file
+            # therefore remains readable even if the process exits before close().
+            self._writer.writeframes(bytes(self._pcm_buffer))
+            file_handle = getattr(self._writer, "_file", None)
+            if file_handle is not None:
+                file_handle.flush()
             self._pcm_buffer.clear()
         if self._marks_writer is not None and self._marks_buffer:
             self._marks_writer.writelines(self._marks_buffer)
@@ -168,6 +240,7 @@ class DiagnosticWavCapture:
         writer.setsampwidth(self._sample_width_bytes)
         writer.setframerate(self._sample_rate)
         self._writer = writer
+        self._files.append(path)
         self._frames_written = 0
         marks_path = path.with_suffix(".jsonl") if self._write_timing_marks else None
         if marks_path is not None:
@@ -219,6 +292,7 @@ class QueuedDiagnosticWavCapture:
         write_timing_marks: bool = True,
         write_buffer_bytes: int = DEFAULT_WRITE_BUFFER_BYTES,
         flush_interval_seconds: float = DEFAULT_FLUSH_INTERVAL_SECONDS,
+        session_id: str | None = None,
     ) -> None:
         if queue_capacity_blocks <= 0:
             raise ValueError("WAV capture queue capacity must be greater than zero.")
@@ -235,6 +309,7 @@ class QueuedDiagnosticWavCapture:
             write_timing_marks=write_timing_marks,
             write_buffer_bytes=write_buffer_bytes,
             flush_interval_seconds=flush_interval_seconds,
+            session_id=session_id,
         )
         self._flush_interval_seconds = flush_interval_seconds
         self._queue: Queue[bytes | object] = Queue(maxsize=queue_capacity_blocks)
@@ -245,6 +320,10 @@ class QueuedDiagnosticWavCapture:
     @property
     def enabled(self) -> bool:
         return self._enabled
+
+    @property
+    def files(self) -> tuple[Path, ...]:
+        return self._capture.files
 
     def start(self) -> None:
         if not self._enabled:

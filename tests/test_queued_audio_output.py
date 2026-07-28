@@ -55,6 +55,23 @@ class QueuedAudioOutputTests(unittest.TestCase):
 
     @patch("audio.playback.validate_output_settings")
     @patch("audio.playback.resolve_device", return_value=7)
+    def test_callback_reports_the_block_actually_delivered_to_portaudio(
+        self,
+        resolve_device: object,
+        validate_output: object,
+    ) -> None:
+        observer = Mock()
+        output = QueuedAudioOutput(
+            7, 48_000, 1, "int16", 2, played_observer=observer
+        )
+        output._enqueue(b"\x01\x02\x03\x04")
+
+        output._output_callback(bytearray(4), 2, None, None)
+
+        observer.assert_called_once_with(b"\x01\x02\x03\x04")
+
+    @patch("audio.playback.validate_output_settings")
+    @patch("audio.playback.resolve_device", return_value=7)
     @patch("audio.playback.device_name", return_value="Output")
     @patch("audio.playback.sd.RawOutputStream", side_effect=FakeRawOutputStream)
     def test_start_preloads_blocks_before_starting_stream(
@@ -69,6 +86,31 @@ class QueuedAudioOutputTests(unittest.TestCase):
         output.start(initial_blocks=(b"\x01\x02\x03\x04",))
 
         self.assertEqual(output.buffered_blocks, 1)
+
+    @patch("audio.playback.validate_output_settings")
+    @patch("audio.playback.resolve_device", return_value=7)
+    @patch("audio.playback.sd.RawOutputStream", side_effect=FakeRawOutputStream)
+    def test_exclusive_output_requests_wasapi_exclusive_mode(
+        self,
+        raw_stream: object,
+        resolve_device: object,
+        validate_output: object,
+    ) -> None:
+        settings = object()
+        output = QueuedAudioOutput(
+            7, 48_000, 2, "int16", 2, exclusive=True
+        )
+
+        with patch(
+            "audio.playback.sd.WasapiSettings", return_value=settings
+        ) as wasapi:
+            output.start()
+
+        wasapi.assert_called_once_with(exclusive=True)
+        self.assertIs(
+            settings,
+            raw_stream.call_args.kwargs["extra_settings"],
+        )
 
     @patch("audio.playback.validate_output_settings")
     @patch("audio.playback.resolve_device", return_value=7)

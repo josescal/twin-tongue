@@ -47,6 +47,13 @@ class PhysicalDeviceSelection:
             "input": None, "output": None
         }
         self._unavailable_preferences: set[SelectionDirection] = set()
+        self._unhealthy_ids: dict[SelectionDirection, set[str]] = {
+            "input": set(), "output": set()
+        }
+        self._last_working_ids: dict[SelectionDirection, str | None] = {
+            direction: preferences.last_working_audio_device(direction)["stable_id"]
+            for direction in ("input", "output")
+        }
 
     def update(self, devices: list[PhysicalDevice]) -> tuple[SelectionDirection, ...]:
         """Replace discovered endpoints and return directions whose state changed."""
@@ -85,12 +92,56 @@ class PhysicalDeviceSelection:
                 )
             self._preferred_ids[direction] = selected.stable_id
             self._preferred_names[direction] = selected.name
+            self._unhealthy_ids[direction].discard(selected.stable_id)
         self._resolve_active(direction)
         self._preferences.set_audio_device(
             direction,
             self._preferred_ids[direction],
             self._preferred_names[direction],
         )
+        return old_signature != self._direction_signature(direction)
+
+    def mark_healthy(self, direction: SelectionDirection, portaudio_index: int) -> bool:
+        """Remember a working endpoint and remove its temporary quarantine."""
+        self._validate_direction(direction)
+        device = self._find_by_index(direction, portaudio_index)
+        old_signature = self._direction_signature(direction)
+        self._unhealthy_ids[direction].discard(device.stable_id)
+        self._last_working_ids[direction] = device.stable_id
+        self._preferences.set_last_working_audio_device(
+            direction, device.stable_id, device.name
+        )
+        self._resolve_active(direction)
+        return old_signature != self._direction_signature(direction)
+
+    def mark_unhealthy(
+        self, direction: SelectionDirection, portaudio_index: int
+    ) -> bool:
+        """Quarantine a failed endpoint until it is selected again or disappears."""
+        self._validate_direction(direction)
+        device = self._find_by_index(direction, portaudio_index)
+        old_signature = self._direction_signature(direction)
+        replace_manual_preference = (
+            self._preferred_ids[direction] == device.stable_id
+        )
+        self._unhealthy_ids[direction].add(device.stable_id)
+        self._resolve_active(direction)
+        replacement = self._active[direction]
+        if replace_manual_preference and replacement is not None:
+            self._preferred_ids[direction] = replacement.stable_id
+            self._preferred_names[direction] = replacement.name
+            self._preferences.set_audio_device(
+                direction,
+                replacement.stable_id,
+                replacement.name,
+            )
+            LOGGER.warning(
+                "event=preferred_audio_device_replaced direction=%s "
+                "discarded=%s replacement=%s",
+                direction,
+                device.name,
+                replacement.name,
+            )
         return old_signature != self._direction_signature(direction)
 
     def snapshot(self) -> dict[str, object]:
@@ -101,18 +152,62 @@ class PhysicalDeviceSelection:
 
     def _resolve_active(self, direction: SelectionDirection) -> None:
         devices = self._devices[direction]
+        available = [
+            item for item in devices
+            if item.stable_id not in self._unhealthy_ids[direction]
+        ]
         preferred_id = self._preferred_ids[direction]
         preferred = next(
-            (item for item in devices if item.stable_id == preferred_id),
+            (item for item in available if item.stable_id == preferred_id),
             None,
         )
-        self._active[direction] = preferred or select_automatic_physical_device(
-            devices, direction, required=False
+        last_working = next(
+            (
+                item for item in available
+                if item.stable_id == self._last_working_ids[direction]
+            ),
+            None,
         )
+        communications_default = next(
+            (item for item in available if item.default_communications),
+            None,
+        )
+        first_available = available[0] if available else None
+        if preferred_id is not None:
+            self._active[direction] = (
+                preferred or last_working or communications_default or first_available
+            )
+        else:
+            self._active[direction] = (
+                communications_default or last_working or first_available
+            )
 
     def _snapshot_direction(self, direction: SelectionDirection) -> dict[str, object]:
         active = self._active[direction]
         preferred_id = self._preferred_ids[direction]
+        expected = next(
+            (
+                item
+                for item in self._devices[direction]
+                if item.stable_id == preferred_id
+            ),
+            None,
+        )
+        if preferred_id is None:
+            expected = next(
+                (
+                    item
+                    for item in self._devices[direction]
+                    if item.default_communications
+                ),
+                None,
+            )
+        fallback_active = bool(
+            active
+            and expected
+            and expected.stable_id in self._unhealthy_ids[direction]
+            and active.stable_id != expected.stable_id
+        )
         return {
             "selection": preferred_id or "automatic",
             "mode": "manual" if preferred_id else "automatic",
@@ -122,11 +217,19 @@ class PhysicalDeviceSelection:
             ),
             "active_id": active.stable_id if active else None,
             "active_name": active.name if active else None,
+            "fallback_active": fallback_active,
+            "discarded_devices": [
+                {"id": item.stable_id, "name": item.name}
+                for item in self._devices[direction]
+                if item.stable_id in self._unhealthy_ids[direction]
+            ],
+            "last_working_id": self._last_working_ids[direction],
             "devices": [
                 {
                     "id": item.stable_id,
                     "name": item.name,
                     "default_communications": item.default_communications,
+                    "healthy": item.stable_id not in self._unhealthy_ids[direction],
                 }
                 for item in self._devices[direction]
             ],
@@ -164,7 +267,25 @@ class PhysicalDeviceSelection:
             self._preferred_ids[direction],
             active.stable_id if active else None,
             active.portaudio_index if active else None,
+            tuple(sorted(self._unhealthy_ids[direction])),
+            self._last_working_ids[direction],
         )
+
+    def _find_by_index(
+        self, direction: SelectionDirection, portaudio_index: int
+    ) -> PhysicalDevice:
+        device = next(
+            (
+                item for item in self._devices[direction]
+                if item.portaudio_index == portaudio_index
+            ),
+            None,
+        )
+        if device is None:
+            raise AudioDeviceError(
+                f"Physical {direction} device {portaudio_index} is unavailable."
+            )
+        return device
 
     @staticmethod
     def _validate_direction(direction: str) -> None:

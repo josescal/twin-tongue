@@ -3,7 +3,7 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from audio.device_manager import AudioDeviceManager
 from audio.physical_devices import PhysicalDevice
@@ -85,8 +85,22 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Your language", decoded_page)
         self.assertIn("Tu idioma", decoded_page)
         self.assertIn('data-audio-direction="input"', decoded_page)
+        self.assertIn("discardedDevice", decoded_page)
+        self.assertIn("device.fallback_active", decoded_page)
         self.assertIn('select id="agent-input-device"', decoded_page)
         self.assertIn('select id="agent-output-device"', decoded_page)
+        self.assertEqual(1, decoded_page.count('id="audio-test-button"'))
+        self.assertNotIn('data-audio-test="input"', decoded_page)
+        self.assertNotIn('data-audio-test="output"', decoded_page)
+        self.assertIn("showAudioTestPreparation(result, 3)", decoded_page)
+        self.assertIn("startAudioRecordingTimer(result, 10)", decoded_page)
+        self.assertIn('stopAudioTest: "Parar y escuchar"', decoded_page)
+        self.assertIn('fetch("/api/audio-test/stop"', decoded_page)
+        self.assertIn(
+            "audioTestStopRequested = true;\n      stopAudioTestTimer();",
+            decoded_page,
+        )
+        self.assertIn('audioTestStartsIn: "La grabación empieza en"', decoded_page)
         self.assertIn("setAudioDevice", decoded_page)
         self.assertIn('data-cable-route="remote_input"', decoded_page)
         self.assertIn("Call speaker", decoded_page)
@@ -101,6 +115,11 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Configurado en default.toml", decoded_page)
         self.assertIn("data-engine-value", decoded_page)
         self.assertIn("OpenAI Realtime Translate", decoded_page)
+        self.assertIn(
+            "Translation enabled — waiting for a call application",
+            decoded_page,
+        )
+        self.assertIn("pipeline.waiting_for_call === true", decoded_page)
         self.assertIn('class="settings-panel"', decoded_page)
         self.assertIn('id="all-translation-button"', decoded_page)
         self.assertNotIn('data-i18n="youHear"', decoded_page)
@@ -355,6 +374,89 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(400, status)
         self.assertIn("Unknown or unavailable", json.loads(body)["error"])
+
+    async def test_post_tests_the_selected_microphone(self) -> None:
+        result = {
+            "direction": "input",
+            "device_name": "Integrated microphone",
+            "sample_rate": 48_000,
+            "channels": 1,
+            "rms_dbfs": -24.5,
+            "peak_dbfs": -8.0,
+            "signal_detected": True,
+        }
+        with patch.object(
+            self.state,
+            "test_audio_device",
+            AsyncMock(return_value=result),
+        ) as test:
+            status, _, body = await self.request("POST", "/api/audio-test/input")
+
+        self.assertEqual(200, status)
+        self.assertEqual(result, json.loads(body))
+        test.assert_awaited_once_with("input")
+
+    async def test_post_tests_the_complete_physical_audio_path(self) -> None:
+        result = {
+            "direction": "physical_path",
+            "input_device_name": "Integrated microphone",
+            "output_device_name": "Computer speakers",
+            "sample_rate": 48_000,
+            "captured_channels": 2,
+            "pipeline_channels": 1,
+            "playback_channels": 2,
+            "echo_guard_applied": False,
+            "assessment": "passed",
+            "passed": True,
+        }
+        with patch.object(
+            self.state,
+            "test_physical_audio_path",
+            AsyncMock(return_value=result),
+        ) as test:
+            status, _, body = await self.request("POST", "/api/audio-test")
+
+        self.assertEqual(200, status)
+        self.assertEqual(result, json.loads(body))
+        test.assert_awaited_once_with()
+
+    async def test_post_stops_the_physical_audio_path_recording(self) -> None:
+        with patch.object(
+            self.state,
+            "stop_physical_audio_path_test",
+            return_value=True,
+        ) as stop:
+            status, _, body = await self.request(
+                "POST", "/api/audio-test/stop"
+            )
+
+        self.assertEqual(200, status)
+        self.assertEqual({"stopping": True}, json.loads(body))
+        stop.assert_called_once_with()
+
+    async def test_post_tests_the_selected_speaker(self) -> None:
+        result = {
+            "direction": "output",
+            "device_name": "Computer speakers",
+            "duration_ms": 450,
+            "tone_hz": 660.0,
+        }
+        with patch.object(
+            self.state,
+            "test_audio_device",
+            AsyncMock(return_value=result),
+        ) as test:
+            status, _, body = await self.request("POST", "/api/audio-test/output")
+
+        self.assertEqual(200, status)
+        self.assertEqual(result, json.loads(body))
+        test.assert_awaited_once_with("output")
+
+    async def test_post_rejects_unknown_audio_test_direction(self) -> None:
+        status, _, body = await self.request("POST", "/api/audio-test/cable")
+
+        self.assertEqual(400, status)
+        self.assertIn("Unknown physical audio direction", json.loads(body)["error"])
 
     async def test_virtual_cable_routes_are_read_only(self) -> None:
         status, _, body = await self.request(

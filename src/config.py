@@ -282,6 +282,7 @@ REQUIRED_AUDIO_KEYS = (
     "sample_format",
     "frame_duration_ms",
     "device_poll_interval_seconds",
+    "virtual_cables",
     "resampling",
 )
 SUPPORTED_LANGUAGE_CODES = {"en", "es", "fr", "ca"}
@@ -343,12 +344,20 @@ REQUIRED_OPENAI_REALTIME_KEYS = (
     "playback_queue_capacity_blocks",
     "reconnect_max_attempts",
     "reconnect_base_delay_seconds",
+    "reconnect_cooldown_seconds",
     "session_setup_timeout_seconds",
     "close_timeout_seconds",
     "metrics_interval_seconds",
     "log_transcript_deltas",
     "transcript_ui_update_interval_ms",
     "transcript_segment_idle_ms",
+    "session_gate",
+    "audio_capture",
+)
+REQUIRED_REALTIME_AUDIO_CAPTURE_KEYS = (
+    "enabled",
+    "directory",
+    "max_seconds_per_file",
 )
 REQUIRED_TTS_KEYS = (
     "model",
@@ -395,6 +404,13 @@ def _resolve_schema_v2(raw: dict[str, Any]) -> dict[str, Any]:
         raise ConfigurationError("schema_version must be 2.")
     audio_source = _mapping(raw.get("audio"), "audio")
     resampling_source = _mapping(audio_source.get("resampling"), "audio.resampling")
+    virtual_cables_source = _mapping(
+        audio_source.get("virtual_cables"), "audio.virtual_cables"
+    )
+    session_monitor_source = _mapping(
+        virtual_cables_source.get("session_monitor"),
+        "audio.virtual_cables.session_monitor",
+    )
     pipeline = _mapping(raw.get("pipeline"), "pipeline")
     runtime = _mapping(pipeline.get("runtime"), "pipeline.runtime")
     classic = _mapping(pipeline.get("classic"), "pipeline.classic")
@@ -570,6 +586,12 @@ def _resolve_schema_v2(raw: dict[str, Any]) -> dict[str, Any]:
         "device_poll_interval_seconds": audio_source.get(
             "device_poll_interval_seconds"
         ),
+        "physical_capture_exclusive_mode": audio_source.get(
+            "physical_capture_exclusive_mode", True
+        ),
+        "virtual_cables": {
+            "session_monitor": deepcopy(session_monitor_source),
+        },
         "resampling": {
             "backend": resampling_source.get("engine"),
             "quality": resampling_source.get("quality"),
@@ -667,6 +689,31 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ConfigurationError(
             "audio.device_poll_interval_seconds must be greater than zero."
         )
+    if not isinstance(
+        config["audio"]["physical_capture_exclusive_mode"], bool
+    ):
+        raise ConfigurationError(
+            "audio.physical_capture_exclusive_mode must be a boolean."
+        )
+    virtual_cables = config["audio"]["virtual_cables"]
+    _require_keys(virtual_cables, ("session_monitor",), "audio.virtual_cables")
+    session_monitor = virtual_cables["session_monitor"]
+    _require_keys(
+        session_monitor,
+        ("poll_interval_seconds", "failure_grace_seconds"),
+        "audio.virtual_cables.session_monitor",
+    )
+    for key in ("poll_interval_seconds", "failure_grace_seconds"):
+        value = session_monitor[key]
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or value <= 0
+        ):
+            raise ConfigurationError(
+                f"audio.virtual_cables.session_monitor.{key} "
+                "must be greater than zero."
+            )
     _require_keys(config["providers"], REQUIRED_PROVIDER_KEYS, "providers")
     _require_keys(config["stt"], REQUIRED_STT_KEYS, "stt")
     stt_rate = config["stt"]["sample_rate"]
@@ -807,6 +854,7 @@ def load_config(path: Path) -> dict[str, Any]:
                     )
             for key in (
                 "reconnect_base_delay_seconds",
+                "reconnect_cooldown_seconds",
                 "session_setup_timeout_seconds",
                 "close_timeout_seconds",
                 "metrics_interval_seconds",
@@ -824,6 +872,131 @@ def load_config(path: Path) -> dict[str, Any]:
                 raise ConfigurationError(
                     f"{settings_path}.log_transcript_deltas must be a boolean."
                 )
+            session_gate = openai_realtime["session_gate"]
+            _require_keys(
+                session_gate,
+                ("enabled", "disconnect_grace_seconds"),
+                f"{settings_path}.session_gate",
+            )
+            if not isinstance(session_gate["enabled"], bool):
+                raise ConfigurationError(
+                    f"{settings_path}.session_gate.enabled must be a boolean."
+                )
+            disconnect_grace = session_gate["disconnect_grace_seconds"]
+            if (
+                not isinstance(disconnect_grace, (int, float))
+                or isinstance(disconnect_grace, bool)
+                or disconnect_grace < 0
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.session_gate.disconnect_grace_seconds "
+                    "must not be negative."
+                )
+            audio_capture = openai_realtime["audio_capture"]
+            _require_keys(
+                audio_capture,
+                REQUIRED_REALTIME_AUDIO_CAPTURE_KEYS,
+                f"{settings_path}.audio_capture",
+            )
+            if not isinstance(audio_capture["enabled"], bool):
+                raise ConfigurationError(
+                    f"{settings_path}.audio_capture.enabled must be a boolean."
+                )
+            capture_directory = audio_capture["directory"]
+            if (
+                not isinstance(capture_directory, str)
+                or not capture_directory.strip()
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.audio_capture.directory must be a "
+                    "non-empty path."
+                )
+            max_capture_seconds = audio_capture["max_seconds_per_file"]
+            if (
+                not isinstance(max_capture_seconds, (int, float))
+                or isinstance(max_capture_seconds, bool)
+                or max_capture_seconds <= 0
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.audio_capture.max_seconds_per_file "
+                    "must be greater than zero."
+                )
+            if not isinstance(
+                audio_capture.get("write_timing_marks", True), bool
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.audio_capture.write_timing_marks "
+                    "must be a boolean."
+                )
+            for key, default in (
+                ("queue_capacity_blocks", 500),
+                ("write_buffer_kb", 64),
+            ):
+                value = audio_capture.get(key, default)
+                if (
+                    not isinstance(value, int)
+                    or isinstance(value, bool)
+                    or value < 1
+                ):
+                    raise ConfigurationError(
+                        f"{settings_path}.audio_capture.{key} must be "
+                        "an integer of at least one."
+                    )
+            capture_flush_interval = audio_capture.get(
+                "flush_interval_seconds", 1.0
+            )
+            if (
+                not isinstance(capture_flush_interval, (int, float))
+                or isinstance(capture_flush_interval, bool)
+                or capture_flush_interval <= 0
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.audio_capture.flush_interval_seconds "
+                    "must be greater than zero."
+                )
+            echo_guard = audio_capture.get("echo_guard", {})
+            if not isinstance(echo_guard, dict):
+                raise ConfigurationError(
+                    f"{settings_path}.audio_capture.echo_guard must be a table."
+                )
+            if not isinstance(echo_guard.get("enabled", True), bool):
+                raise ConfigurationError(
+                    f"{settings_path}.audio_capture.echo_guard.enabled "
+                    "must be a boolean."
+                )
+            for key, default in (
+                ("reference_activity_dbfs", -48.0),
+                ("near_end_override_dbfs", -26.0),
+                ("post_reference_override_dbfs", -38.0),
+                ("near_end_hold_ms", 800.0),
+                ("hangover_ms", 350.0),
+                ("correlation_window_ms", 200.0),
+                ("reference_delay_max_ms", 500.0),
+                ("correlation_threshold", 0.72),
+            ):
+                value = echo_guard.get(key, default)
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or (
+                        key
+                        in {
+                            "hangover_ms",
+                            "near_end_hold_ms",
+                            "correlation_window_ms",
+                            "reference_delay_max_ms",
+                        }
+                        and value < 0
+                    )
+                    or (
+                        key == "correlation_threshold"
+                        and not 0 <= value <= 1
+                    )
+                ):
+                    raise ConfigurationError(
+                        f"{settings_path}.audio_capture.echo_guard.{key} "
+                        "must be a valid number."
+                    )
             for key in (
                 "transcript_ui_update_interval_ms",
                 "transcript_segment_idle_ms",

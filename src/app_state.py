@@ -57,6 +57,7 @@ class PipelineStatus(StrEnum):
     SWITCHING = "switching"
     INITIALIZING = "initializing"
     RECONNECTING = "reconnecting"
+    WAITING_FOR_CALL = "waiting_for_call"
     TRANSLATION_UNAVAILABLE = "translation_unavailable"
     TRANSLATION_READY = "translation_ready"
     PASSTHROUGH = "passthrough"
@@ -164,10 +165,26 @@ class ApplicationState:
             "pipelines": {
                 name: {
                     "mode": self._modes[name].value,
+                    "effective_mode": (
+                        PipelineMode.TRANSLATE.value
+                        if self._modes[name] is PipelineMode.TRANSLATE
+                        and self._statuses[name] is PipelineStatus.TRANSLATION_READY
+                        else PipelineMode.PASSTHROUGH.value
+                    ),
                     "engine": self._engines[name].value,
                     "voice_gender": self._voice_genders[name].value,
                     "running": name in self._active_pipelines,
-                    "status": self._statuses[name].value,
+                    # Older control pages only recognize passthrough as a ready
+                    # original-audio state. Keep that wire value compatible while
+                    # exposing the more precise call-waiting condition separately.
+                    "status": (
+                        PipelineStatus.PASSTHROUGH.value
+                        if self._statuses[name] is PipelineStatus.WAITING_FOR_CALL
+                        else self._statuses[name].value
+                    ),
+                    "waiting_for_call": (
+                        self._statuses[name] is PipelineStatus.WAITING_FOR_CALL
+                    ),
                 }
                 for name in PIPELINE_NAMES
             },
@@ -258,16 +275,27 @@ class ApplicationState:
     def is_audio_recording_active(self) -> bool:
         """Return whether any active pipeline is being recorded."""
         return self._audio_recording_enabled and (
-            self._manual_audio_recording
+            (
+                self._manual_audio_recording
+                and any(
+                    self._engines[name] is TranslationEngine.CLASSIC
+                    for name in self._active_pipelines
+                )
+            )
             or bool(self._automatic_recording_pipelines())
         )
 
     def is_audio_recording_active_for(self, name: str) -> bool:
         """Return whether one pipeline should write diagnostic audio."""
         parsed_name = self._parse_pipeline_name(name)
-        return self._audio_recording_enabled and parsed_name in self._active_pipelines and (
-            self._manual_audio_recording
-            or self._modes[parsed_name] is PipelineMode.TRANSLATE
+        return (
+            self._audio_recording_enabled
+            and parsed_name in self._active_pipelines
+            and self._engines[parsed_name] is TranslationEngine.CLASSIC
+            and (
+                self._manual_audio_recording
+                or self._automatic_recording_active_for(parsed_name)
+            )
         )
 
     async def set_manual_audio_recording(self, active: bool) -> dict[str, object]:
@@ -424,6 +452,28 @@ class ApplicationState:
                 changed = True
             return self._publish_change() if changed else self.snapshot()
 
+    async def test_audio_device(self, direction: str) -> dict[str, object]:
+        """Test the currently active physical microphone or speaker."""
+        if direction not in {"input", "output"}:
+            raise ValueError(f"Unknown physical audio direction '{direction}'.")
+        if self._device_manager is None:
+            raise ValueError("Audio device management is not available.")
+        return await self._device_manager.test_physical_device(
+            cast(Literal["input", "output"], direction)
+        )
+
+    async def test_physical_audio_path(self) -> dict[str, object]:
+        """Test the selected microphone and speaker as one physical path."""
+        if self._device_manager is None:
+            raise ValueError("Audio device management is not available.")
+        return await self._device_manager.test_physical_audio_path()
+
+    def stop_physical_audio_path_test(self) -> bool:
+        """Request playback of the audio captured by the active path test."""
+        if self._device_manager is None:
+            return False
+        return self._device_manager.stop_physical_audio_path_test()
+
     async def set_pipeline_status(
         self, name: str, status: str | PipelineStatus
     ) -> dict[str, object]:
@@ -465,6 +515,13 @@ class ApplicationState:
             name
             for name in PIPELINE_NAMES
             if name in self._active_pipelines
+            and self._automatic_recording_active_for(name)
+        )
+
+    def _automatic_recording_active_for(self, name: PipelineName) -> bool:
+        """Record only classic translation; Realtime never writes diagnostic audio."""
+        return (
+            self._engines[name] is TranslationEngine.CLASSIC
             and self._modes[name] is PipelineMode.TRANSLATE
         )
 

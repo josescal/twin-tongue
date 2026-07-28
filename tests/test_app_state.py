@@ -23,6 +23,51 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(state.is_audio_recording_active_for("agent_to_remote"))
         self.assertFalse(state.is_audio_recording_active_for("remote_to_agent"))
 
+    async def test_realtime_pipeline_never_claims_to_record_audio(self) -> None:
+        state = ApplicationState(
+            audio_recording_enabled=True,
+            initial_engines={
+                "remote_to_agent": "openai_realtime",
+                "agent_to_remote": "openai_realtime",
+            },
+        )
+        await state.set_mode("remote_to_agent", "translate")
+
+        await state.set_pipeline_status("remote_to_agent", "translation_ready")
+        self.assertFalse(state.is_audio_recording_active_for("remote_to_agent"))
+
+        waiting = await state.set_pipeline_status(
+            "remote_to_agent",
+            "waiting_for_call",
+        )
+
+        self.assertFalse(waiting["audio_recording"]["active"])
+        self.assertEqual([], waiting["audio_recording"]["automatic_pipelines"])
+        self.assertFalse(state.is_audio_recording_active_for("remote_to_agent"))
+
+    async def test_snapshot_exposes_requested_and_effective_modes(self) -> None:
+        state = ApplicationState(
+            active_pipelines=("remote_to_agent",),
+            initial_modes={"remote_to_agent": "translate"},
+            initial_engines={"remote_to_agent": "openai_realtime"},
+        )
+
+        unavailable = await state.set_pipeline_status(
+            "remote_to_agent", "translation_unavailable"
+        )
+        ready = await state.set_pipeline_status(
+            "remote_to_agent", "translation_ready"
+        )
+
+        self.assertEqual(
+            "passthrough",
+            unavailable["pipelines"]["remote_to_agent"]["effective_mode"],
+        )
+        self.assertEqual(
+            "translate",
+            ready["pipelines"]["remote_to_agent"]["effective_mode"],
+        )
+
     async def test_manual_recording_covers_passthrough_without_persisting_mode(self) -> None:
         state = ApplicationState(audio_recording_enabled=True)
 
@@ -103,6 +148,23 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
             "passthrough",
             snapshot["pipelines"]["remote_to_agent"]["status"],
         )
+
+    async def test_pipeline_can_wait_for_a_call_without_disabling_translation(
+        self,
+    ) -> None:
+        state = ApplicationState(
+            initial_modes={"remote_to_agent": "translate"},
+            initial_engines={"remote_to_agent": "openai_realtime"},
+        )
+
+        snapshot = await state.set_pipeline_status(
+            "remote_to_agent", "waiting_for_call"
+        )
+
+        pipeline = snapshot["pipelines"]["remote_to_agent"]
+        self.assertEqual("translate", pipeline["mode"])
+        self.assertEqual("passthrough", pipeline["status"])
+        self.assertTrue(pipeline["waiting_for_call"])
 
     async def test_invalid_pipeline_status_is_rejected(self) -> None:
         state = ApplicationState()
@@ -256,6 +318,45 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("", entry["source_text"])
         self.assertEqual("Hello", entry["translated_text"])
         self.assertEqual("pending", entry["translation_status"])
+
+    async def test_realtime_repeated_phrase_is_preserved_as_a_separate_turn(
+        self,
+    ) -> None:
+        state = ApplicationState()
+
+        for transcript_id in range(8, 12):
+            state.publish_realtime_transcript(
+                "remote_to_agent",
+                transcript_id,
+                "",
+                "¿Qué hora es?",
+                "en",
+                "es",
+                final=True,
+            )
+
+        entries = state.snapshot()["transcription"]["entries"]
+        self.assertEqual(4, len(entries))
+        self.assertEqual([8, 9, 10, 11], [entry["id"] for entry in entries])
+        self.assertEqual(
+            ["¿Qué hora es?"] * 4,
+            [entry["translated_text"] for entry in entries],
+        )
+
+    async def test_realtime_equal_captions_are_isolated_by_direction(
+        self,
+    ) -> None:
+        state = ApplicationState()
+
+        state.publish_realtime_transcript(
+            "remote_to_agent", 1, "", "Hello!", "es", "en", final=True
+        )
+        state.publish_realtime_transcript(
+            "agent_to_remote", 2, "", "Hello.", "es", "en", final=True
+        )
+
+        entries = state.snapshot()["transcription"]["entries"]
+        self.assertEqual(2, len(entries))
 
     async def test_transcription_is_bounded_and_can_be_cleared(self) -> None:
         state = ApplicationState()

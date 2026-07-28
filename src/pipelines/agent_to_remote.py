@@ -3,6 +3,7 @@
 import asyncio
 
 from audio.device_manager import AudioDeviceManager
+from audio.echo_guard import EchoReferenceBus
 from audio.voice_detection import VoiceDetectorLoader
 from app_state import ApplicationState
 from metrics import CsvMetricsWriter
@@ -23,6 +24,7 @@ class AgentToRemotePipeline(RemoteToAgentPipeline):
         control_state: ApplicationState | None = None,
         device_manager: AudioDeviceManager | None = None,
         metrics_writer: CsvMetricsWriter | None = None,
+        echo_reference: EchoReferenceBus | None = None,
     ) -> None:
         super().__init__(
             config=config,
@@ -36,4 +38,5 @@ class AgentToRemotePipeline(RemoteToAgentPipeline):
             control_state=control_state,
             device_manager=device_manager,
             metrics_writer=metrics_writer,
+            echo_reference=echo_reference,
         )

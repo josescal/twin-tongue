@@ -27,6 +27,7 @@ from audio.voice_detection import (
     preload_voice_detection_package,
 )
 from config import ConfigurationError, configure_logging, load_config
+from preferences import UserPreferences
 from providers.elevenlabs_stt import ElevenLabsRealtimeSTT
 from providers.stt import (
     RealtimeTranscript,
@@ -87,8 +88,12 @@ def parse_args(
     parser.add_argument("--dtype", default=audio_config["sample_format"])
     parser.add_argument("--frame-duration-ms", type=float, default=audio_config["frame_duration_ms"])
     parser.add_argument("--language", default=languages_config["remote"])
-    voice_detection_config = agent_pipeline_config["voice_detection"]
-    segmentation_config = agent_pipeline_config["segmentation"]
+    classic_config = agent_pipeline_config["classic"]
+    assert isinstance(classic_config, dict)
+    voice_detection_config = classic_config["voice_detection"]
+    segmentation_config = classic_config["segmentation"]
+    assert isinstance(voice_detection_config, dict)
+    assert isinstance(segmentation_config, dict)
     parser.add_argument(
         "--voice-threshold",
         type=float,
@@ -102,7 +107,7 @@ def parse_args(
     parser.add_argument(
         "--voice-preroll-ms",
         type=float,
-        default=voice_detection_config["preroll_ms"],
+        default=voice_detection_config["speech_pad_ms"],
     )
     parser.add_argument(
         "--segment-minimum-duration-ms",
@@ -153,8 +158,10 @@ async def run_realtime_stt(
     """Coordinate capture, PCM conversion, SDK streaming, and shutdown."""
     stt_config = config["stt"]
     audio_config = config["audio"]
+    classic_pipeline_config = config["classic_pipeline"]
     assert isinstance(stt_config, dict)
     assert isinstance(audio_config, dict)
+    assert isinstance(classic_pipeline_config, dict)
     _validate_arguments(args, stt_config)
     input_identifier = resolve_device(args.input_device, "input")
     validate_input_settings(input_identifier, args.sample_rate, args.channels, args.dtype)
@@ -175,7 +182,7 @@ async def run_realtime_stt(
     }
     voice_detector = await asyncio.to_thread(
         create_voice_detector,
-        config["voice_detection"],
+        classic_pipeline_config["voice_detection"],
         voice_detection_settings,
         int(stt_config["sample_rate"]),
         frame_duration_ms=args.frame_duration_ms,
@@ -483,13 +490,18 @@ def main() -> int:
         assert isinstance(pipelines, dict)
         agent_pipeline = pipelines["agent_to_remote"]
         assert isinstance(agent_pipeline, dict)
+        languages = UserPreferences(
+            PROJECT_ROOT / "config" / "preferences.json"
+        ).participant_languages
         args = parse_args(
             config["stt"],
             config["audio"],
-            config["languages"],
+            languages,
             agent_pipeline,
         )
-        voice_detection = config["voice_detection"]
+        classic_pipeline = config["classic_pipeline"]
+        assert isinstance(classic_pipeline, dict)
+        voice_detection = classic_pipeline["voice_detection"]
         assert isinstance(voice_detection, dict)
         preload_voice_detection_package(voice_detection)
         api_key, base_url = _load_environment()

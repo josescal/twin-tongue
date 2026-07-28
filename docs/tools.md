@@ -2,6 +2,10 @@
 
 Twin Tongue includes focused command-line tools for validating one layer of the audio and provider stack at a time. Run them from the repository root with the virtual environment activated:
 
+For a complete device → cable → passthrough → Echo Guard → translation
+sequence, follow the
+[isolated audio pipeline test runbook](isolated-pipeline-tests.md).
+
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ```
@@ -17,7 +21,7 @@ Use headphones at a moderate volume for every tool that records or plays audio. 
 5. `test_realtime_stt.py` — validate capture, resampling, VAD, and ElevenLabs STT.
 6. `test_translation.py` — validate Google Cloud Translation independently.
 7. `test_tts.py` — validate ElevenLabs synthesis independently.
-8. `src/main.py` — validate the integrated production pipelines.
+8. `src/main.py` — validate OpenAI Realtime or the integrated Classic pipelines.
 
 ## `list_audio_devices.py`
 
@@ -106,6 +110,34 @@ python tools/test_tts.py `
 
 The tool uses the model, voices, output format, and speed from `config/default.toml`. Explicit `--voice-id`, `--speed`, or `--output` options take precedence. Generated audio belongs under `artifacts/`, which is excluded from source control.
 
+## OpenAI Realtime integrated check
+
+There is no separate production-equivalent Realtime test tool. Realtime depends
+on the live VB-CABLE application-session gate, directional routing, and streaming
+playback, so validate it through the application:
+
+```powershell
+python .\src\main.py
+```
+
+Then:
+
+1. open `http://127.0.0.1:8765`;
+2. confirm the calling application appears on CABLE A and CABLE B;
+3. enable only one translation direction;
+4. wait for `Ready`;
+5. speak through that direction and verify the destination and transcript;
+6. repeat for the opposite direction.
+
+Without a connected call application the panel should show that translation is
+waiting for a call and no OpenAI session should be created. Realtime uses
+bounded capture/send/playback queues. When
+`pipeline.speech_to_speech.openai_realtime.audio_capture.enabled` is true, it
+writes `captured`, `accepted`, `sent`, and `played` WAV/JSONL tracks plus a
+per-call manifest below the configured directory. Inspect
+`logs/twin-tongue.log` for structured connection and queue events. Enable
+`[observability.metrics]` only when CSV measurements are needed.
+
 ## Common failure checks
 
 - `ModuleNotFoundError`: activate `.venv` or run the tool with `.\.venv\Scripts\python.exe`.
@@ -113,3 +145,6 @@ The tool uses the model, voices, output format, and speed from `config/default.t
 - Ambiguous device: avoid short name fragments that match multiple PortAudio endpoints.
 - No STT/TTS/translation response: verify `.env`, provider access, network connectivity, and language/model compatibility.
 - Drop or overflow counters increase: close competing audio applications, check the benchmark, and verify the configured sample rate and channels.
+- Realtime stays unavailable: verify `OPENAI_API_KEY`, cable application
+  detection, network access, and the configured endpoint/model. Twin Tongue uses
+  original-audio passthrough while retrying.
