@@ -138,16 +138,66 @@ class StreamingPcmInt16Resampler:
         self._pending.clear()
 
 
+class IdentityStreamingPcmInt16Resampler:
+    """Preserve PCM16 bytes when input and output rates already match."""
+
+    def __init__(
+        self,
+        sample_rate: int,
+        *,
+        output_block_frames: int | None = None,
+    ) -> None:
+        _validate_sample_rates(sample_rate, sample_rate)
+        if output_block_frames is not None and output_block_frames <= 0:
+            raise ValueError("Output block frames must be greater than zero.")
+        self.input_rate = sample_rate
+        self.output_rate = sample_rate
+        self.output_block_frames = output_block_frames
+        self._pending = bytearray()
+
+    def process(self, mono_pcm: bytes, *, final: bool = False) -> tuple[bytes, ...]:
+        if len(mono_pcm) % 2:
+            raise ValueError("PCM int16 data must contain complete samples.")
+        if self.output_block_frames is None:
+            return (mono_pcm,) if mono_pcm else ()
+
+        self._pending.extend(mono_pcm)
+        block_bytes = self.output_block_frames * 2
+        complete = len(self._pending) // block_bytes
+        blocks = tuple(
+            bytes(self._pending[offset : offset + block_bytes])
+            for offset in range(0, complete * block_bytes, block_bytes)
+        )
+        del self._pending[: complete * block_bytes]
+        if final and self._pending:
+            blocks += (bytes(self._pending),)
+            self._pending.clear()
+        return blocks
+
+    def reset(self) -> None:
+        self._pending.clear()
+
+
+PcmInt16Resampler = (
+    StreamingPcmInt16Resampler | IdentityStreamingPcmInt16Resampler
+)
+
+
 def create_resampler(
     settings: Mapping[str, object],
     input_rate: int,
     output_rate: int,
     *,
     output_block_frames: int | None = None,
-) -> StreamingPcmInt16Resampler:
+) -> PcmInt16Resampler:
     """Build the configured PCM resampler without exposing its backend to callers."""
     _validate_sample_rates(input_rate, output_rate)
     validate_resampling_settings(settings)
+    if input_rate == output_rate:
+        return IdentityStreamingPcmInt16Resampler(
+            input_rate,
+            output_block_frames=output_block_frames,
+        )
     backend_name = str(settings.get("backend", "soxr")).strip().lower()
     factory = _BACKEND_FACTORIES[backend_name]
     return StreamingPcmInt16Resampler(

@@ -1,5 +1,9 @@
 # Audio device and routing architecture
 
+This document describes device ownership and signal flow. For operational queue
+behavior see [CSV metrics reference](metrics-reference.md); for incident triage
+see the [Realtime support runbook](support-runbook.md).
+
 This document explains how a calling application, VB-CABLE A+B, the physical
 audio devices, and Twin Tongue connect to each other. The endpoint names are
 initially confusing: for a virtual cable, `Input` is the playback side where an

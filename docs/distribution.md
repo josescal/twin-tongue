@@ -1,5 +1,11 @@
 # Windows distribution guide
 
+Recipient-facing support should use the bundled
+[Realtime support runbook](support-runbook.md),
+[configuration reference](configuration.md), and
+[CSV metrics reference](metrics-reference.md). Never include `.env` in a support
+package.
+
 The build script creates a portable Windows directory and ZIP containing the application, Python runtime, dependencies, default configuration, documentation, VB-CABLE installer, and third-party license notices.
 
 ## Build the package

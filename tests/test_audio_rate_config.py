@@ -86,7 +86,7 @@ class AudioRateConfigurationTests(unittest.TestCase):
             ["playback_queue_capacity_blocks"],
         )
         self.assertEqual(
-            4,
+            12,
             config["realtime_translation"]["directions"]["agent_to_remote"]
             ["playback_queue_capacity_blocks"],
         )
@@ -165,15 +165,20 @@ class AudioRateConfigurationTests(unittest.TestCase):
             config["realtime_translation"]["openai"]["send_queue_capacity_frames"],
         )
         self.assertEqual(
-            25,
+            150,
             config["realtime_translation"]["openai"][
                 "received_queue_capacity_blocks"
             ],
         )
         self.assertEqual(
-            4,
+            12,
             config["realtime_translation"]["openai"]["playback_queue_capacity_blocks"],
         )
+        adaptive = config["realtime_translation"]["openai"]["adaptive_playout"]
+        self.assertTrue(adaptive["enabled"])
+        self.assertEqual(1000.0, adaptive["target_backlog_ms"])
+        self.assertEqual(2800.0, adaptive["emergency_backlog_ms"])
+        self.assertEqual(1.15, adaptive["maximum_speed"])
         self.assertFalse(
             config["realtime_translation"]["openai"]["log_transcript_deltas"]
         )
@@ -218,7 +223,7 @@ class AudioRateConfigurationTests(unittest.TestCase):
         self.assertEqual(
             {
                 "enabled": True,
-                "disconnect_grace_seconds": 3.0,
+                "disconnect_grace_seconds": 5.0,
             },
             config["realtime_translation"]["openai"]["session_gate"],
         )

@@ -227,6 +227,17 @@ The `tools/` directory contains focused diagnostics for device discovery, callba
 
 See [Diagnostic and support tools](docs/tools.md) for commands, options, expected output, and safety notes.
 
+For an active incident, start with the
+[Realtime support runbook](docs/support-runbook.md). It maps symptoms to the
+event log, daily metrics and diagnostic tracks. The
+[CSV metrics reference](docs/metrics-reference.md) explains every column and
+includes the capture, send, receive, adaptive and playback queue diagrams.
+The [Realtime log event reference](docs/log-events-reference.md) maps stable
+event names to support actions without mixing periodic measurements into logs.
+
+The [documentation index](docs/README.md) links the complete operator,
+architecture, installation, testing and distribution set.
+
 ## Tests
 
 The project uses the standard library's `unittest` runner:
@@ -239,17 +250,24 @@ Tests cover application state, audio buffering and pacing, device discovery, pro
 
 ## Logs, metrics, and diagnostic audio
 
-Runtime logs are written asynchronously to `logs/twin-tongue.log`. Rotation size, retained file count, queue capacity, and level are configured in `[observability.logging]`.
+Runtime logs are written asynchronously to `logs/twin-tongue.log` at `INFO`
+level by default. They contain lifecycle changes and actionable failures, not
+periodic Realtime measurements. Rotation size, retained file count, queue
+capacity, and level are configured in `[observability.logging]`.
 
-When `[observability.metrics].enabled` is `true` (it is `false` by default),
-metrics are written to daily `logs/metrics-YYYY-MM-DD.csv` files. They include the
+`[observability.metrics].enabled` is `true` by default. Metrics are written to
+daily `logs/metrics-YYYY-MM-DD.csv` files. They include the
 selected engine, queue pressure, discarded blocks and segments, callback gaps,
 output underflows, event-loop lag, recording drops, provider activity, playback
 latency, VAD, and segmentation counters. Realtime rows additionally include
-first-audio and trailing latency, input/output duration, send/playback backlog,
-errors, reconnections, and call-session gate state.
+first-audio and trailing latency, backlog percentiles, adaptive playback speed,
+time compression, signal levels, source-specific playback drops, errors,
+reconnections, and call-session gate state.
 
 Timestamped ElevenLabs transcripts expose word-level `logprob` values. Debug traces record word count, average and minimum log probability, timing, and word data to support analysis of STT false positives.
+
+See [CSV metrics reference](docs/metrics-reference.md) for field definitions,
+queue capacities, expected relationships and incident patterns.
 
 When `[pipeline.classic.defaults.stt.elevenlabs.audio_capture].enabled` is `true`,
 diagnostic audio is recorded automatically for each translated Classic direction.

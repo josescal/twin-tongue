@@ -1,5 +1,10 @@
 # Isolated audio pipeline test runbook
 
+Use this document to qualify devices and routes layer by layer. For an incident
+on an already qualified installation, start with the
+[Realtime support runbook](support-runbook.md) and preserve the matching
+[CSV metrics](metrics-reference.md) before changing configuration.
+
 Use this runbook before testing both Twin Tongue directions together. Each
 phase introduces only one new layer, so a failed result has a limited set of
 possible causes.

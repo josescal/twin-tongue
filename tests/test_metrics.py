@@ -19,6 +19,17 @@ class CsvMetricsWriterTests(unittest.TestCase):
         self.assertIn("realtime_received_queue_dropped_blocks", METRIC_FIELDS)
         self.assertIn("realtime_received_queue_discontinuities", METRIC_FIELDS)
 
+    def test_realtime_support_diagnostics_are_metrics_not_log_only(self) -> None:
+        for field in (
+            "realtime_input_rms_dbfs",
+            "realtime_output_peak_amplitude",
+            "realtime_playback_maximum_callback_gap_ms",
+            "realtime_session_gate_observation",
+            "realtime_session_gate_call_active",
+            "realtime_session_gate_blocked_ms",
+        ):
+            self.assertIn(field, METRIC_FIELDS)
+
     def test_writes_one_header_and_processable_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "metrics.csv"

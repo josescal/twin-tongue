@@ -1,11 +1,15 @@
 """Directional audio pipeline for OpenAI's dedicated Realtime translation API."""
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass
 import logging
+import math
 from pathlib import Path
 import random
 import time
+
+import numpy as np
 
 from app_state import ApplicationState, PipelineMode
 from audio.capture import QueuedAudioInput
@@ -20,8 +24,9 @@ from audio.pcm import (
 )
 from audio.playback import QueuedAudioOutput
 from audio.portaudio import AudioDeviceError, format_device
-from audio.resampling import StreamingPcmInt16Resampler, create_resampler
+from audio.resampling import PcmInt16Resampler, create_resampler
 from audio.speech_latency import StreamingSpeechLatencyTracker
+from audio.time_stretch import StreamingWsola
 from audio.wav_capture import QueuedDiagnosticWavCapture
 from audio.webrtc_aec3 import WebRtcAec3
 from config import set_log_pipeline
@@ -44,6 +49,7 @@ class TranslatedAudioBlock:
 
     pcm16: bytes
     generation: int
+    final: bool = False
 
 
 TranslatedAudioQueueItem = TranslatedAudioBlock | None
@@ -77,6 +83,7 @@ class RealtimeSessionGate:
         self.deactivations = 0
         self.blocked_seconds = 0.0
         self._last_present_at: float | None = None
+        self._inactive_since: float | None = None
         self._unknown_since: float | None = None
         self._last_evaluated_at: float | None = None
         self._last_requested = False
@@ -101,15 +108,19 @@ class RealtimeSessionGate:
 
         if observation is True:
             self._last_present_at = now
+            self._inactive_since = None
             self._unknown_since = None
             call_active = True
         elif observation is False:
             self._unknown_since = None
+            if self._inactive_since is None:
+                self._inactive_since = now
             call_active = (
-                self._last_present_at is not None
-                and now - self._last_present_at < self.disconnect_grace_seconds
+                self._last_call_active
+                and now - self._inactive_since < self.disconnect_grace_seconds
             )
         else:
+            self._inactive_since = None
             if self._unknown_since is None:
                 self._unknown_since = now
             call_active = (
@@ -178,17 +189,31 @@ class OpenAIRealtimeTranslatePipeline:
         self._diagnostic_manifest: DiagnosticCallManifest | None = None
         self._accept_translated_audio = False
         self._translated_output: QueuedAudioOutput | None = None
-        self._translated_resampler: StreamingPcmInt16Resampler | None = None
+        self._translated_resampler: PcmInt16Resampler | None = None
         self._translated_output_channels = 1
         self._translated_audio_queue: (
             asyncio.Queue[TranslatedAudioQueueItem] | None
         ) = None
         self._translated_audio_pending_bytes = bytearray()
         self._translated_audio_block_bytes = 0
+        self._translated_audio_block_duration_ms = 20.0
         self._translated_audio_generation = 0
         self._translated_audio_dropped_blocks = 0
         self._translated_audio_discontinuities = 0
         self._translated_audio_maximum_buffered_blocks = 0
+        self._translated_audio_silence_boundary_dropped_blocks = 0
+        self._translated_playback_dropped_blocks = 0
+        self._passthrough_playback_dropped_blocks = 0
+        self._adaptive_playout: dict[str, object] = {}
+        self._time_stretcher: StreamingWsola | None = None
+        self._adaptive_speed = 1.0
+        self._adaptive_maximum_speed = 1.0
+        self._adaptive_compressed_input_samples = 0
+        self._adaptive_compressed_output_samples = 0
+        self._adaptive_time_above_target_seconds = 0.0
+        self._adaptive_last_observed_at: float | None = None
+        self._adaptive_last_backlog_ms = 0.0
+        self._adaptive_backlog_samples_ms: deque[float] = deque(maxlen=18_000)
         self._aec3_render_sample_rate = 48_000
         self._last_status: str | None = None
         self._transcript_sequence = 0
@@ -290,6 +315,9 @@ class OpenAIRealtimeTranslatePipeline:
             dtype="int16",
             frames_per_block=output_frames,
             queue_capacity_blocks=int(realtime["playback_queue_capacity_blocks"]),
+            discontinuity_fade_ms=float(
+                dict(realtime["adaptive_playout"])["crossfade_ms"]
+            ),
         )
         input_resampler = create_resampler(
             resampling,
@@ -320,9 +348,12 @@ class OpenAIRealtimeTranslatePipeline:
             )
             * 2
         )
+        self._translated_audio_block_duration_ms = frame_duration_ms
         self._translated_audio_queue = asyncio.Queue(
             maxsize=int(realtime["received_queue_capacity_blocks"])
         )
+        self._adaptive_playout = dict(realtime["adaptive_playout"])
+        self._time_stretcher = StreamingWsola(api_rate)
         self._aec3_render_sample_rate = output_rate
         audio_capture_settings = dict(realtime["audio_capture"])
         capture_directory = Path(str(audio_capture_settings["directory"]))
@@ -349,6 +380,7 @@ class OpenAIRealtimeTranslatePipeline:
                 audio_capture_settings.get("flush_interval_seconds", 1.0)
             ),
             "session_id": call_id,
+            "log_file_creation": False,
         }
         self._input_audio_capture = QueuedDiagnosticWavCapture(
             **capture_options,
@@ -513,14 +545,13 @@ class OpenAIRealtimeTranslatePipeline:
                 previous_gate_audio_allowed = last_gate_audio_allowed
                 if gate_decision.audio_allowed != previous_gate_audio_allowed:
                     LOGGER.info(
-                        "event=realtime_session_gate_changed route=%s "
-                        "translation_requested=%s application_session=%s "
-                        "audio_allowed=%s session_required=%s",
+                        "event=realtime_call_state_changed route=%s "
+                        "active=%s translation_requested=%s "
+                        "application_observation=%s",
                         session_gate_route,
+                        gate_decision.audio_allowed,
                         requested_translation,
                         session_observation,
-                        gate_decision.audio_allowed,
-                        gate_decision.session_required,
                     )
                     last_gate_audio_allowed = gate_decision.audio_allowed
                     if self._diagnostic_manifest is not None:
@@ -584,39 +615,40 @@ class OpenAIRealtimeTranslatePipeline:
                     reconnect_at = now
 
                 if not requested_translation:
-                    self._set_translation_audio_acceptance(False)
-                    self._discard_audio_send_queue("translation_not_requested")
-                    if close_task is not None:
-                        close_task.cancel()
-                        await asyncio.gather(close_task, return_exceptions=True)
-                        close_task = None
-                        await session.abort()
                     if connect_task is not None and not connect_task.done():
                         connect_task.cancel()
                         await asyncio.gather(connect_task, return_exceptions=True)
                     connect_task = None
-                    if session.connected:
-                        # A mode change is not the end of a media stream. Do not
-                        # drain delayed translations into passthrough; close the
-                        # socket immediately and discard the old audio instead.
-                        await session.abort()
-                    if configured_target is not None:
-                        self._enqueue_transcript_boundary()
-                        configured_target = None
-                    if previous_gate_audio_allowed is True:
-                        discarded = output.discard_pending_blocks()
+                    if session.connected and close_task is None:
+                        close_task = asyncio.create_task(
+                            self._close_session_after_source_end(
+                                session,
+                                input_resampler,
+                            ),
+                            name=(
+                                f"{self.pipeline_name} realtime mode-change drain"
+                            ),
+                        )
+                        LOGGER.info(
+                            "event=realtime_translation_mode_changed "
+                            "action=drain_before_passthrough"
+                        )
+                    if close_task is None:
+                        self._set_translation_audio_acceptance(False)
+                        self._discard_audio_send_queue(
+                            "translation_not_requested"
+                        )
                         input_resampler.reset()
                         self._translated_resampler.reset()
                         passthrough_resampler.reset()
-                        LOGGER.info(
-                            "event=realtime_translation_audio_discarded "
-                            "reason=translation_disabled blocks=%s",
-                            discarded,
-                        )
                     await self._set_status(
-                        "waiting_for_call"
-                        if gate_decision.waiting_for_application
-                        else "passthrough"
+                        "draining"
+                        if close_task is not None
+                        else (
+                            "waiting_for_call"
+                            if gate_decision.waiting_for_application
+                            else "passthrough"
+                        )
                     )
                 else:
                     if close_task is None and session.error_event.is_set():
@@ -756,12 +788,16 @@ class OpenAIRealtimeTranslatePipeline:
                     ):
                         for api_block in input_resampler.process(accepted):
                             self._enqueue_audio_for_translation(api_block)
-                    else:
+                    elif close_task is None:
                         for original in passthrough_resampler.process(accepted):
                             played = convert_int16_channels(
                                 original, 1, output_channels
                             )
-                            output.push_block(played)
+                            self._push_output_block(
+                                output,
+                                played,
+                                source="passthrough",
+                            )
 
                 current_input_revision = self.device_manager.revision(input_device_key)
                 if current_input_revision != input_revision:
@@ -937,9 +973,27 @@ class OpenAIRealtimeTranslatePipeline:
                         "received_queue_discontinuities": (
                             self._translated_audio_discontinuities
                         ),
+                        "received_queue_silence_boundary_dropped_blocks": (
+                            self._translated_audio_silence_boundary_dropped_blocks
+                        ),
                         "received_queue_maximum_buffered_blocks": (
                             self._translated_audio_maximum_buffered_blocks
                         ),
+                        "adaptive_playout": {
+                            "backlog_p50_ms": self._percentile(
+                                self._adaptive_backlog_samples_ms, 0.50
+                            ),
+                            "backlog_p95_ms": self._percentile(
+                                self._adaptive_backlog_samples_ms, 0.95
+                            ),
+                            "backlog_p99_ms": self._percentile(
+                                self._adaptive_backlog_samples_ms, 0.99
+                            ),
+                            "maximum_speed": self._adaptive_maximum_speed,
+                            "time_above_target_seconds": (
+                                self._adaptive_time_above_target_seconds
+                            ),
+                        },
                     },
                 )
                 LOGGER.info(
@@ -952,23 +1006,7 @@ class OpenAIRealtimeTranslatePipeline:
             self._received_audio_capture = None
             self._output_audio_capture = None
             self._diagnostic_manifest = None
-            LOGGER.info(
-                "event=pipeline_stopped engine=openai_realtime "
-                "input_duration_seconds=%.3f output_duration_seconds=%.3f "
-                "first_audio_latency_ms=%s total_latency_ms=%s errors=%s "
-                "reconnections=%s diagnostic_capture_dropped_blocks=%s "
-                "received_queue_dropped_blocks=%s "
-                "received_queue_discontinuities=%s",
-                session.statistics.input_duration_seconds(session.sample_rate),
-                session.statistics.output_duration_seconds(session.sample_rate),
-                session.statistics.first_audio_latency_ms,
-                session.statistics.total_latency_ms,
-                session.statistics.errors,
-                session.statistics.reconnections,
-                diagnostic_dropped_blocks,
-                self._translated_audio_dropped_blocks,
-                self._translated_audio_discontinuities,
-            )
+            LOGGER.info("event=pipeline_stopped engine=openai_realtime")
 
     def _record_captured_audio(self, pcm16: bytes) -> None:
         """Record raw endpoint PCM, including CABLE A during passthrough."""
@@ -1034,7 +1072,7 @@ class OpenAIRealtimeTranslatePipeline:
             speech_latency.reset_stream()
         if self.pipeline_name == "agent_to_remote":
             self.aec3.reset()
-        LOGGER.info(
+        LOGGER.debug(
             "event=diagnostic_call_capture_changed active=%s",
             active,
         )
@@ -1075,18 +1113,6 @@ class OpenAIRealtimeTranslatePipeline:
         if measurement is None:
             return
         values = measurement.as_dict()
-        LOGGER.info(
-            "event=realtime_voice_latency utterance_id=%s "
-            "accepted_to_sent_ms=%.3f sent_to_received_ms=%.3f "
-            "received_to_played_ms=%.3f accepted_to_received_ms=%.3f "
-            "accepted_to_played_ms=%.3f",
-            values["utterance_id"],
-            values["accepted_to_sent_ms"],
-            values["sent_to_received_ms"],
-            values["received_to_played_ms"],
-            values["accepted_to_received_ms"],
-            values["accepted_to_played_ms"],
-        )
         if self._diagnostic_manifest is not None:
             self._diagnostic_manifest.event(
                 "voice_latency_measured",
@@ -1122,7 +1148,8 @@ class OpenAIRealtimeTranslatePipeline:
                 queue.task_done()
                 discarded += 1
         if discarded:
-            LOGGER.info(
+            self._audio_send_dropped_blocks += discarded
+            LOGGER.debug(
                 "event=realtime_translation_send_queue_discarded "
                 "reason=%s blocks=%s",
                 reason,
@@ -1159,7 +1186,7 @@ class OpenAIRealtimeTranslatePipeline:
     async def _close_session_after_source_end(
         self,
         session: OpenAIRealtimeTranslationSession,
-        input_resampler: StreamingPcmInt16Resampler,
+        input_resampler: PcmInt16Resampler,
     ) -> None:
         """Flush local input, drain provider output, and close one call session."""
         for final_block in input_resampler.process(b"", final=True):
@@ -1186,9 +1213,28 @@ class OpenAIRealtimeTranslatePipeline:
         if received_queue is not None:
             try:
                 await asyncio.wait_for(
+                    received_queue.put(
+                        TranslatedAudioBlock(
+                            pcm16=b"",
+                            generation=self._translated_audio_generation,
+                            final=True,
+                        )
+                    ),
+                    timeout=session.close_timeout_seconds,
+                )
+                await asyncio.wait_for(
                     received_queue.join(),
                     timeout=session.close_timeout_seconds,
                 )
+                output = self._translated_output
+                if output is not None:
+                    deadline = time.monotonic() + session.close_timeout_seconds
+                    while output.buffered_blocks > 0:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError
+                        await asyncio.sleep(
+                            output.frames_per_block / output.sample_rate / 2
+                        )
             except TimeoutError:
                 LOGGER.warning(
                     "event=realtime_translation_receive_drain_timeout "
@@ -1215,10 +1261,7 @@ class OpenAIRealtimeTranslatePipeline:
             block = bytes(self._translated_audio_pending_bytes[:block_bytes])
             del self._translated_audio_pending_bytes[:block_bytes]
             if queue.full():
-                self._discard_translated_audio_queue(
-                    "received_queue_overflow",
-                    preserve_pending=True,
-                )
+                self._recover_received_queue()
             queue.put_nowait(
                 TranslatedAudioBlock(
                     pcm16=block,
@@ -1229,6 +1272,68 @@ class OpenAIRealtimeTranslatePipeline:
                 self._translated_audio_maximum_buffered_blocks,
                 queue.qsize(),
             )
+
+    def _recover_received_queue(self) -> None:
+        """Remove only stale backlog, preferring the quietest nearby boundary."""
+        queue = self._translated_audio_queue
+        if queue is None or queue.empty():
+            return
+        buffered: list[TranslatedAudioBlock] = []
+        while True:
+            try:
+                item = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            queue.task_done()
+            if item is not None:
+                buffered.append(item)
+        if not buffered:
+            return
+
+        block_ms = self._received_block_ms()
+        recovery_ms = float(self._adaptive_playout["recovery_backlog_ms"])
+        target_blocks = max(1, round(recovery_ms / block_ms))
+        required_drop = max(1, len(buffered) - target_blocks)
+        search_blocks = max(
+            1,
+            round(
+                float(self._adaptive_playout["silence_search_ms"])
+                / block_ms
+            ),
+        )
+        first = max(1, required_drop - search_blocks)
+        last = min(len(buffered) - 1, required_drop + search_blocks)
+        cut = min(required_drop, len(buffered) - 1)
+        quietest_dbfs = 0.0
+        if first <= last:
+            candidates = [
+                (self._pcm_rms_dbfs(buffered[index].pcm16), index)
+                for index in range(first, last + 1)
+            ]
+            quietest_dbfs, cut = min(candidates)
+
+        retained = buffered[cut:]
+        for item in retained:
+            queue.put_nowait(item)
+        self._translated_audio_dropped_blocks += cut
+        self._translated_audio_discontinuities += 1
+        silence_threshold = float(
+            self._adaptive_playout["silence_threshold_dbfs"]
+        )
+        if quietest_dbfs <= silence_threshold:
+            self._translated_audio_silence_boundary_dropped_blocks += cut
+        output = getattr(self, "_translated_output", None)
+        if output is not None:
+            output.mark_discontinuity()
+        LOGGER.warning(
+            "event=realtime_translation_backlog_recovered "
+            "reason=received_queue_high_watermark dropped_blocks=%s "
+            "retained_blocks=%s boundary_rms_dbfs=%.1f silence_boundary=%s",
+            cut,
+            len(retained),
+            quietest_dbfs,
+            quietest_dbfs <= silence_threshold,
+        )
 
     def _discard_translated_audio_queue(
         self,
@@ -1257,7 +1362,7 @@ class OpenAIRealtimeTranslatePipeline:
         if discarded:
             self._translated_audio_dropped_blocks += discarded
             self._translated_audio_discontinuities += 1
-            LOGGER.warning(
+            LOGGER.debug(
                 "event=realtime_translation_received_queue_discarded "
                 "reason=%s blocks=%s generation=%s",
                 reason,
@@ -1266,11 +1371,17 @@ class OpenAIRealtimeTranslatePipeline:
             )
 
     async def _translated_audio_worker(self) -> None:
-        """Resample and feed physical playback independently from WebSocket reads."""
+        """Adapt playout speed and feed playback independently from socket reads."""
         queue = self._translated_audio_queue
         output = self._translated_output
         resampler = self._translated_resampler
-        if queue is None or output is None or resampler is None:
+        time_stretcher = self._time_stretcher
+        if (
+            queue is None
+            or output is None
+            or resampler is None
+            or time_stretcher is None
+        ):
             return
         worker_generation = self._translated_audio_generation
         while True:
@@ -1285,27 +1396,173 @@ class OpenAIRealtimeTranslatePipeline:
                     continue
                 if item.generation != worker_generation:
                     resampler.reset()
+                    time_stretcher.reset()
                     worker_generation = item.generation
-                for block in resampler.process(item.pcm16):
-                    converted = convert_int16_channels(
-                        block, 1, self._translated_output_channels
+                backlog_ms = (
+                    (queue.qsize() + 1) * self._received_block_ms()
+                    + output.buffered_blocks
+                    * output.frames_per_block
+                    / output.sample_rate
+                    * 1000
+                )
+                speed = self._observe_adaptive_backlog(backlog_ms)
+                stretched_blocks = time_stretcher.process(
+                    item.pcm16,
+                    speed=speed,
+                    final=item.final,
+                )
+                self._adaptive_compressed_input_samples += len(item.pcm16) // 2
+                self._adaptive_compressed_output_samples += sum(
+                    len(block) // 2 for block in stretched_blocks
+                )
+                for stretched in stretched_blocks:
+                    await self._play_translated_pcm(
+                        stretched,
+                        item,
+                        output,
+                        resampler,
                     )
-                    while (
-                        self._accept_translated_audio
-                        and item.generation == self._translated_audio_generation
-                        and output.buffered_blocks >= output.queue_capacity_blocks
-                    ):
-                        await asyncio.sleep(
-                            output.frames_per_block / output.sample_rate / 4
+                if item.final:
+                    for final_block in resampler.process(b"", final=True):
+                        converted = convert_int16_channels(
+                            final_block,
+                            1,
+                            self._translated_output_channels,
                         )
-                    if (
-                        not self._accept_translated_audio
-                        or item.generation != self._translated_audio_generation
-                    ):
-                        break
-                    output.push_block(converted)
+                        await self._wait_for_playback_capacity(output, item)
+                        if (
+                            self._accept_translated_audio
+                            and item.generation
+                            == self._translated_audio_generation
+                        ):
+                            self._push_output_block(
+                                output,
+                                converted,
+                                source="translated",
+                            )
             finally:
                 queue.task_done()
+
+    async def _play_translated_pcm(
+        self,
+        pcm16: bytes,
+        item: TranslatedAudioBlock,
+        output: QueuedAudioOutput,
+        resampler: PcmInt16Resampler,
+    ) -> None:
+        for block in resampler.process(pcm16):
+            converted = convert_int16_channels(
+                block, 1, self._translated_output_channels
+            )
+            await self._wait_for_playback_capacity(output, item)
+            if (
+                not self._accept_translated_audio
+                or item.generation != self._translated_audio_generation
+            ):
+                return
+            self._push_output_block(output, converted, source="translated")
+
+    async def _wait_for_playback_capacity(
+        self,
+        output: QueuedAudioOutput,
+        item: TranslatedAudioBlock,
+    ) -> None:
+        while (
+            self._accept_translated_audio
+            and item.generation == self._translated_audio_generation
+            and output.buffered_blocks >= output.queue_capacity_blocks
+        ):
+            await asyncio.sleep(
+                output.frames_per_block / output.sample_rate / 4
+            )
+
+    def _observe_adaptive_backlog(self, backlog_ms: float) -> float:
+        """Choose a pitch-preserving catch-up speed from the current backlog."""
+        now = time.monotonic()
+        target = float(self._adaptive_playout["target_backlog_ms"])
+        accelerated = float(
+            self._adaptive_playout["accelerated_backlog_ms"]
+        )
+        emergency = float(self._adaptive_playout["emergency_backlog_ms"])
+        moderate = float(self._adaptive_playout["moderate_speed"])
+        maximum = float(self._adaptive_playout["maximum_speed"])
+        if self._adaptive_last_observed_at is not None:
+            elapsed = max(0.0, now - self._adaptive_last_observed_at)
+            if self._adaptive_last_backlog_ms > target:
+                self._adaptive_time_above_target_seconds += elapsed
+        self._adaptive_last_observed_at = now
+        self._adaptive_last_backlog_ms = backlog_ms
+        self._adaptive_backlog_samples_ms.append(backlog_ms)
+
+        if not bool(self._adaptive_playout["enabled"]) or backlog_ms <= target:
+            speed = 1.0
+        elif backlog_ms < accelerated:
+            progress = (backlog_ms - target) / (accelerated - target)
+            speed = 1.05 + progress * (moderate - 1.05)
+        elif backlog_ms < emergency:
+            progress = (backlog_ms - accelerated) / (
+                emergency - accelerated
+            )
+            speed = moderate + progress * (maximum - moderate)
+        else:
+            speed = maximum
+        self._adaptive_speed = speed
+        self._adaptive_maximum_speed = max(
+            self._adaptive_maximum_speed,
+            speed,
+        )
+        return speed
+
+    def _received_block_ms(self) -> float:
+        return max(
+            1.0,
+            float(
+                getattr(
+                    self,
+                    "_translated_audio_block_duration_ms",
+                    20.0,
+                )
+            ),
+        )
+
+    @staticmethod
+    def _pcm_rms_dbfs(pcm16: bytes) -> float:
+        if not pcm16:
+            return -120.0
+        samples = np.frombuffer(pcm16, dtype="<i2").astype(np.float32)
+        rms = math.sqrt(float(np.mean(samples * samples)))
+        if rms <= 1e-6:
+            return -120.0
+        return 20.0 * math.log10(rms / 32768.0)
+
+    def _push_output_block(
+        self,
+        output: QueuedAudioOutput,
+        block: bytes,
+        *,
+        source: str,
+    ) -> None:
+        dropped_before = output.dropped_blocks
+        output.push_block(block)
+        if output.dropped_blocks == dropped_before:
+            return
+        if source == "translated":
+            self._translated_playback_dropped_blocks += 1
+        else:
+            self._passthrough_playback_dropped_blocks += 1
+
+    @staticmethod
+    def _percentile(samples: deque[float], percentile: float) -> float:
+        if not samples:
+            return 0.0
+        ordered = sorted(samples)
+        index = (len(ordered) - 1) * percentile
+        lower = math.floor(index)
+        upper = math.ceil(index)
+        if lower == upper:
+            return ordered[lower]
+        fraction = index - lower
+        return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
 
     def _enqueue_transcript_delta(self, direction: str, delta: str) -> None:
         """Queue transcript text without delaying WebSocket audio reception."""
@@ -1469,7 +1726,11 @@ class OpenAIRealtimeTranslatePipeline:
             "capture_blocks": capture.statistics.captured_blocks,
             "capture_dropped_blocks": capture.statistics.dropped_blocks,
             "capture_overflows": capture.statistics.input_overflows,
+            "capture_invalid_blocks": capture.statistics.invalid_block_sizes,
             "capture_maximum_buffered_blocks": capture.statistics.maximum_buffered_blocks,
+            "capture_maximum_callback_gap_ms": (
+                capture.statistics.maximum_callback_gap_ms
+            ),
             "realtime_send_queue_buffered_blocks": (
                 self._audio_send_queue.qsize()
                 if self._audio_send_queue is not None
@@ -1496,6 +1757,29 @@ class OpenAIRealtimeTranslatePipeline:
             "realtime_received_queue_discontinuities": (
                 self._translated_audio_discontinuities
             ),
+            "realtime_received_queue_silence_boundary_dropped_blocks": (
+                self._translated_audio_silence_boundary_dropped_blocks
+            ),
+            "realtime_backlog_p50_ms": self._percentile(
+                self._adaptive_backlog_samples_ms, 0.50
+            ),
+            "realtime_backlog_p95_ms": self._percentile(
+                self._adaptive_backlog_samples_ms, 0.95
+            ),
+            "realtime_backlog_p99_ms": self._percentile(
+                self._adaptive_backlog_samples_ms, 0.99
+            ),
+            "realtime_backlog_time_above_target_ms": (
+                self._adaptive_time_above_target_seconds * 1000
+            ),
+            "realtime_adaptive_speed": self._adaptive_speed,
+            "realtime_adaptive_maximum_speed": self._adaptive_maximum_speed,
+            "realtime_time_compression_ratio": (
+                self._adaptive_compressed_input_samples
+                / self._adaptive_compressed_output_samples
+                if self._adaptive_compressed_output_samples
+                else 1.0
+            ),
             "translated_output_underflows": output.output_underflows,
             "realtime_playback_buffered_blocks": output.buffered_blocks,
             "realtime_playback_buffered_ms": (
@@ -1509,7 +1793,17 @@ class OpenAIRealtimeTranslatePipeline:
                 * 1000
             ),
             "realtime_playback_dropped_blocks": output.dropped_blocks,
+            "realtime_translated_playback_dropped_blocks": (
+                self._translated_playback_dropped_blocks
+            ),
+            "realtime_passthrough_playback_dropped_blocks": (
+                self._passthrough_playback_dropped_blocks
+            ),
             "realtime_playback_empty_buffer_events": output.empty_buffer_events,
+            "realtime_playback_invalid_blocks": output.invalid_block_sizes,
+            "realtime_playback_maximum_callback_gap_ms": (
+                output.maximum_callback_gap_ms
+            ),
             "realtime_first_audio_latency_ms": (
                 session.statistics.first_audio_latency_ms
                 if session.statistics.first_audio_latency_ms is not None
@@ -1525,6 +1819,14 @@ class OpenAIRealtimeTranslatePipeline:
             ),
             "realtime_output_audio_duration_ms": (
                 session.statistics.output_duration_seconds(session.sample_rate) * 1000
+            ),
+            "realtime_input_rms_dbfs": session.statistics.input_rms_dbfs(),
+            "realtime_input_peak_amplitude": (
+                session.statistics.input_peak_amplitude
+            ),
+            "realtime_output_rms_dbfs": session.statistics.output_rms_dbfs(),
+            "realtime_output_peak_amplitude": (
+                session.statistics.output_peak_amplitude
             ),
             "realtime_errors": session.statistics.errors,
             "realtime_reconnections": session.statistics.reconnections,
@@ -1543,9 +1845,12 @@ class OpenAIRealtimeTranslatePipeline:
                 if gate_decision.observation is False
                 else "unknown"
             ),
+            "realtime_session_gate_call_active": gate_decision.call_active,
             "realtime_session_gate_activations": session_gate.activations,
             "realtime_session_gate_deactivations": session_gate.deactivations,
-            "realtime_session_gate_blocked_seconds": session_gate.blocked_seconds,
+            "realtime_session_gate_blocked_ms": (
+                session_gate.blocked_seconds * 1000
+            ),
             "realtime_voice_latency_completed_utterances": speech_latency[
                 "completed_utterances"
             ],
@@ -1563,48 +1868,6 @@ class OpenAIRealtimeTranslatePipeline:
                 else ""
             ),
         }
-        LOGGER.info(
-            "event=realtime_translation_metrics first_audio_latency_ms=%s "
-            "total_latency_ms=%s input_duration_seconds=%.3f "
-            "output_duration_seconds=%.3f input_rms_dbfs=%s input_peak=%s "
-            "output_rms_dbfs=%s output_peak=%s playback_buffered_ms=%.1f "
-            "received_buffered_ms=%.1f received_maximum_buffered_ms=%.1f "
-            "received_dropped_blocks=%s received_discontinuities=%s "
-            "playback_maximum_buffered_ms=%.1f playback_dropped_blocks=%s "
-            "playback_underflows=%s capture_dropped_blocks=%s "
-            "input_transcript_characters=%s output_transcript_characters=%s "
-            "errors=%s reconnections=%s gate_audio_allowed=%s "
-            "gate_observation=%s gate_blocked_seconds=%.3f "
-            "voice_latency_completed=%s voice_latency_last_ms=%s "
-            "voice_latency_average_ms=%s",
-            session.statistics.first_audio_latency_ms,
-            session.statistics.total_latency_ms,
-            session.statistics.input_duration_seconds(session.sample_rate),
-            session.statistics.output_duration_seconds(session.sample_rate),
-            session.statistics.input_rms_dbfs(),
-            session.statistics.input_peak_amplitude,
-            session.statistics.output_rms_dbfs(),
-            session.statistics.output_peak_amplitude,
-            values["realtime_playback_buffered_ms"],
-            values["realtime_received_queue_buffered_ms"],
-            values["realtime_received_queue_maximum_buffered_ms"],
-            self._translated_audio_dropped_blocks,
-            self._translated_audio_discontinuities,
-            values["realtime_playback_maximum_buffered_ms"],
-            output.dropped_blocks,
-            output.output_underflows,
-            capture.statistics.dropped_blocks,
-            session.statistics.input_transcript_characters,
-            session.statistics.output_transcript_characters,
-            session.statistics.errors,
-            session.statistics.reconnections,
-            gate_decision.audio_allowed,
-            values["realtime_session_gate_observation"],
-            session_gate.blocked_seconds,
-            speech_latency["completed_utterances"],
-            speech_latency["last_accepted_to_played_ms"],
-            speech_latency["average_accepted_to_played_ms"],
-        )
         if self.metrics_writer is not None:
             await asyncio.to_thread(self.metrics_writer.write, values)
 

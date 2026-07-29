@@ -33,6 +33,7 @@ class QueuedAudioOutput:
         queue_capacity_blocks: int = 10,
         played_observer: Callable[[bytes], None] | None = None,
         exclusive: bool = False,
+        discontinuity_fade_ms: float = ANTI_CLICK_FADE_MS,
     ) -> None:
         if queue_capacity_blocks <= 0:
             raise ValueError("Queue capacity must be greater than zero.")
@@ -47,9 +48,11 @@ class QueuedAudioOutput:
         self.exclusive = exclusive
         self._blocks = PcmBlockBuffer(queue_capacity_blocks, self.block_bytes)
         self._silence = bytes(self.block_bytes)
+        if discontinuity_fade_ms <= 0:
+            raise ValueError("Discontinuity fade must be greater than zero.")
         self._fade_frames = min(
             frames_per_block,
-            max(2, round(sample_rate * ANTI_CLICK_FADE_MS / 1000)),
+            max(2, round(sample_rate * discontinuity_fade_ms / 1000)),
         )
         self._last_frame = [0] * channels
         self._recovering_from_empty_buffer = False
@@ -143,6 +146,11 @@ class QueuedAudioOutput:
     def discard_pending_blocks(self) -> int:
         """Drop buffered audio, for example after an output-mode switch."""
         return self._blocks.clear()
+
+    def mark_discontinuity(self) -> None:
+        """Crossfade the next queued block after an intentional timeline jump."""
+        if self.played_blocks > 0:
+            self._discontinuity_pending = True
 
     def _enqueue(self, block: bytes) -> None:
         result = self._blocks.write(block)

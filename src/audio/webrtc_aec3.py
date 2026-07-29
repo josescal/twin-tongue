@@ -10,7 +10,7 @@ from typing import Protocol
 from aec_audio_processing import AudioProcessor
 
 from audio.pcm import convert_int16_channels
-from audio.resampling import StreamingPcmInt16Resampler, create_resampler
+from audio.resampling import PcmInt16Resampler, create_resampler
 
 
 LOGGER = logging.getLogger(__name__)
@@ -93,7 +93,7 @@ class WebRtcAec3:
         self._sample_rate: int | None = None
         self._frame_bytes = 0
         self._render_queue: deque[tuple[bytes, int, int]] = deque()
-        self._render_resampler: StreamingPcmInt16Resampler | None = None
+        self._render_resampler: PcmInt16Resampler | None = None
         self._render_source_rate: int | None = None
         self._render_pending = bytearray()
         self._lock = Lock()

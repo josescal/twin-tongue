@@ -81,6 +81,23 @@ class RealtimeSessionGateTests(unittest.TestCase):
         self.assertFalse(expired.session_required)
         self.assertFalse(expired.audio_allowed)
 
+    def test_disconnect_grace_starts_with_first_inactive_observation(self) -> None:
+        self.gate.evaluate(requested=True, observation=True, now=10.0)
+
+        first_miss = self.gate.evaluate(
+            requested=True, observation=False, now=100.0
+        )
+        within_grace = self.gate.evaluate(
+            requested=True, observation=False, now=102.9
+        )
+        expired = self.gate.evaluate(
+            requested=True, observation=False, now=103.1
+        )
+
+        self.assertTrue(first_miss.audio_allowed)
+        self.assertTrue(within_grace.audio_allowed)
+        self.assertFalse(expired.audio_allowed)
+
     def test_passthrough_never_requires_an_api_session(self) -> None:
         decision = self.gate.evaluate(
             requested=False, observation=True, now=10.0
@@ -121,6 +138,35 @@ class OpenAIRealtimePipelineTests(unittest.IsolatedAsyncioTestCase):
         self.pipeline._translated_audio_dropped_blocks = 0
         self.pipeline._translated_audio_discontinuities = 0
         self.pipeline._translated_audio_maximum_buffered_blocks = 0
+        self.pipeline._translated_audio_silence_boundary_dropped_blocks = 0
+        self.pipeline._translated_playback_dropped_blocks = 0
+        self.pipeline._passthrough_playback_dropped_blocks = 0
+        self.pipeline._adaptive_playout = {
+            "enabled": True,
+            "target_backlog_ms": 1000.0,
+            "accelerated_backlog_ms": 2000.0,
+            "emergency_backlog_ms": 2800.0,
+            "recovery_backlog_ms": 1500.0,
+            "moderate_speed": 1.10,
+            "maximum_speed": 1.15,
+            "silence_search_ms": 250.0,
+            "silence_threshold_dbfs": -42.0,
+            "crossfade_ms": 15.0,
+        }
+        self.pipeline._adaptive_speed = 1.0
+        self.pipeline._adaptive_maximum_speed = 1.0
+        self.pipeline._adaptive_compressed_input_samples = 0
+        self.pipeline._adaptive_compressed_output_samples = 0
+        self.pipeline._adaptive_time_above_target_seconds = 0.0
+        self.pipeline._adaptive_last_observed_at = None
+        self.pipeline._adaptive_last_backlog_ms = 0.0
+        from collections import deque
+
+        self.pipeline._adaptive_backlog_samples_ms = deque(maxlen=18_000)
+        self.pipeline._time_stretcher = MagicMock()
+        self.pipeline._time_stretcher.process.side_effect = (
+            lambda pcm16, **_: [pcm16] if pcm16 else []
+        )
         self.pipeline._last_status = None
         self.pipeline._input_audio_capture = None
         self.pipeline._accepted_audio_capture = None
@@ -493,6 +539,60 @@ class OpenAIRealtimePipelineTests(unittest.IsolatedAsyncioTestCase):
         session.close.assert_awaited_once_with()
         session.abort.assert_not_awaited()
 
+    async def test_source_end_waits_for_physical_playback_to_drain(self) -> None:
+        session = MagicMock()
+        session.close_timeout_seconds = 0.2
+        session.close = AsyncMock()
+        session.abort = AsyncMock()
+        input_resampler = MagicMock()
+        input_resampler.process.return_value = ()
+        translated_resampler = MagicMock()
+        translated_resampler.process.return_value = ()
+        output = MagicMock()
+        output.buffered_blocks = 1
+        output.frames_per_block = 960
+        output.sample_rate = 48_000
+        self.pipeline._accept_translated_audio = True
+        self.pipeline._translated_audio_queue = asyncio.Queue()
+        self.pipeline._translated_resampler = translated_resampler
+        self.pipeline._translated_output = output
+        worker = asyncio.create_task(self.pipeline._translated_audio_worker())
+
+        async def finish_playback() -> None:
+            await asyncio.sleep(0.03)
+            output.buffered_blocks = 0
+
+        release = asyncio.create_task(finish_playback())
+        started = asyncio.get_running_loop().time()
+        await self.pipeline._close_session_after_source_end(
+            session,
+            input_resampler,
+        )
+        elapsed = asyncio.get_running_loop().time() - started
+        self.pipeline._translated_audio_queue.put_nowait(None)
+        await worker
+        await release
+
+        self.assertGreaterEqual(elapsed, 0.01)
+        session.close.assert_awaited_once_with()
+
+    def test_adaptive_playout_speed_tracks_backlog_watermarks(self) -> None:
+        with patch(
+            "pipelines.openai_realtime.time.monotonic",
+            side_effect=[10.0, 11.0, 12.0, 13.0],
+        ):
+            normal = self.pipeline._observe_adaptive_backlog(800.0)
+            moderate = self.pipeline._observe_adaptive_backlog(1500.0)
+            accelerated = self.pipeline._observe_adaptive_backlog(2400.0)
+            emergency = self.pipeline._observe_adaptive_backlog(2900.0)
+
+        self.assertEqual(1.0, normal)
+        self.assertGreater(moderate, 1.05)
+        self.assertGreater(accelerated, moderate)
+        self.assertEqual(1.15, emergency)
+        self.assertEqual(1.15, self.pipeline._adaptive_maximum_speed)
+        self.assertEqual(2.0, self.pipeline._adaptive_time_above_target_seconds)
+
     async def test_raw_input_is_recorded_during_call_in_both_modes(self) -> None:
         input_capture = MagicMock()
         self.pipeline._input_audio_capture = input_capture
@@ -652,7 +752,7 @@ class OpenAIRealtimePipelineTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(0, self.pipeline._translated_audio_dropped_blocks)
 
-    async def test_received_queue_overflow_discards_stale_generation(self) -> None:
+    async def test_received_queue_overflow_discards_only_oldest_backlog(self) -> None:
         self.pipeline._translated_audio_queue = asyncio.Queue(maxsize=2)
         self.pipeline._accept_translated_audio = True
 
@@ -662,12 +762,18 @@ class OpenAIRealtimePipelineTests(unittest.IsolatedAsyncioTestCase):
             b"\x03\x00\x03\x00"
         )
 
-        self.assertEqual(1, self.pipeline._translated_audio_generation)
-        self.assertEqual(2, self.pipeline._translated_audio_dropped_blocks)
+        self.assertEqual(0, self.pipeline._translated_audio_generation)
+        self.assertEqual(1, self.pipeline._translated_audio_dropped_blocks)
         self.assertEqual(1, self.pipeline._translated_audio_discontinuities)
-        queued = self.pipeline._translated_audio_queue.get_nowait()
-        self.assertEqual(b"\x03\x00\x03\x00", queued.pcm16)
-        self.assertEqual(1, queued.generation)
+        queued = [
+            self.pipeline._translated_audio_queue.get_nowait()
+            for _ in range(2)
+        ]
+        self.assertEqual(
+            [b"\x02\x00\x02\x00", b"\x03\x00\x03\x00"],
+            [item.pcm16 for item in queued],
+        )
+        self.assertTrue(all(item.generation == 0 for item in queued))
 
     async def test_disabling_translation_invalidates_in_flight_audio(self) -> None:
         translated_output = MagicMock()

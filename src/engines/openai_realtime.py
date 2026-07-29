@@ -313,9 +313,16 @@ class OpenAIRealtimeTranslationSession:
             await asyncio.wait_for(
                 self._session_closed.wait(), timeout=self.close_timeout_seconds
             )
-        except (TimeoutError, RealtimeTranslationError) as error:
+        except TimeoutError:
             LOGGER.warning(
-                "event=realtime_translation_close_incomplete action=abort error=%s", error
+                "event=realtime_session_close_timeout "
+                "waiting_for=session.closed timeout_seconds=%.1f action=abort",
+                self.close_timeout_seconds,
+            )
+        except RealtimeTranslationError as error:
+            LOGGER.warning(
+                "event=realtime_session_close_failed action=abort error=%s",
+                error,
             )
         finally:
             await self.abort()
@@ -370,7 +377,7 @@ class OpenAIRealtimeTranslationSession:
                 event_type = event.get("type")
                 if isinstance(event_type, str) and event_type not in self._observed_event_types:
                     self._observed_event_types.add(event_type)
-                    LOGGER.info(
+                    LOGGER.debug(
                         "event=realtime_translation_event_observed type=%s",
                         event_type,
                     )
@@ -431,7 +438,7 @@ class OpenAIRealtimeTranslationSession:
         self.statistics.errors += 1
         self.last_error = error
         self.error_event.set()
-        LOGGER.warning(
+        LOGGER.debug(
             "event=realtime_translation_session_error error_type=%s error=%r",
             type(error).__name__,
             error,

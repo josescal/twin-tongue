@@ -196,17 +196,29 @@ sample_rate = 24000
 send_chunk_duration_ms = 200
 input_queue_capacity_blocks = 25
 send_queue_capacity_frames = 3
-received_queue_capacity_blocks = 25
-playback_queue_capacity_blocks = 4
+received_queue_capacity_blocks = 150
+playback_queue_capacity_blocks = 12
 reconnect_max_attempts = 5
 reconnect_base_delay_seconds = 0.5
 reconnect_cooldown_seconds = 10.0
 session_setup_timeout_seconds = 10.0
-close_timeout_seconds = 2.0
+close_timeout_seconds = 5.0
 metrics_interval_seconds = 10.0
 log_transcript_deltas = false
 transcript_ui_update_interval_ms = 150
 transcript_segment_idle_ms = 500
+
+[pipeline.speech_to_speech.defaults.translation.openai_realtime.adaptive_playout]
+enabled = true
+target_backlog_ms = 1000.0
+accelerated_backlog_ms = 2000.0
+emergency_backlog_ms = 2800.0
+recovery_backlog_ms = 1500.0
+moderate_speed = 1.10
+maximum_speed = 1.15
+silence_search_ms = 250.0
+silence_threshold_dbfs = -42.0
+crossfade_ms = 15.0
 
 [pipeline.speech_to_speech.defaults.translation.openai_realtime.input_transcription]
 enabled = true
@@ -223,7 +235,7 @@ flush_interval_seconds = 1.0
 
 [pipeline.speech_to_speech.defaults.translation.openai_realtime.session_gate]
 enabled = true
-disconnect_grace_seconds = 3.0
+disconnect_grace_seconds = 5.0
 
 [pipeline.speech_to_speech.remote_to_agent.translation]
 engine = "openai_realtime"
@@ -232,7 +244,7 @@ engine = "openai_realtime"
 engine = "openai_realtime"
 
 [observability.logging]
-level = "DEBUG"
+level = "INFO"
 file_enabled = true
 file = "logs/twin-tongue.log"
 max_size_mb = 5
@@ -241,7 +253,7 @@ queue_capacity = 1000
 file_flush_interval_seconds = 5.0
 
 [observability.metrics]
-enabled = false
+enabled = true
 file = "logs/metrics.csv"
 retention_days = 14
 interval_seconds = 60.0

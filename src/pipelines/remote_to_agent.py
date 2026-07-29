@@ -26,10 +26,7 @@ from audio.speech_segmentation import (
     create_speech_segmenter,
 )
 from audio.wav_capture import QueuedDiagnosticWavCapture
-from audio.resampling import (
-    StreamingPcmInt16Resampler,
-    create_resampler,
-)
+from audio.resampling import PcmInt16Resampler, create_resampler
 from audio.voice_detection import StreamingVoiceDetector, VoiceDetectorLoader
 from config import set_log_pipeline
 from app_state import ApplicationState, PipelineMode
@@ -142,8 +139,8 @@ class RemoteToAgentPipeline:
         self._voice_detector: StreamingVoiceDetector | None = None
         self._voice_detector_load_error: BaseException | None = None
         self._speech_segmenter: AdaptiveSpeechSegmenter | None = None
-        self._input_resampler: StreamingPcmInt16Resampler | None = None
-        self._passthrough_resampler: StreamingPcmInt16Resampler | None = None
+        self._input_resampler: PcmInt16Resampler | None = None
+        self._passthrough_resampler: PcmInt16Resampler | None = None
         self.playback_backlog_discard_age_seconds = 4.0
         self.segment_discard_age_seconds = 8.0
         self.playback_backlog_segments_to_keep = 2
@@ -1084,7 +1081,7 @@ class RemoteToAgentPipeline:
         live_output = self._live_output
         if live_output is None:
             raise RuntimeError("Translated output is not initialized.")
-        resampler: StreamingPcmInt16Resampler | None = None
+        resampler: PcmInt16Resampler | None = None
         pending_input = bytearray()
         output_pcm_bytes = 0
         output_underflows_before = live_output.output_underflows

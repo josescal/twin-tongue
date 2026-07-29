@@ -93,14 +93,21 @@ Realtime uses independent capture, network-send, provider-receive, and playback
 queues. Capture retains 25 application blocks of 20 ms (500 ms). The resampler
 accumulates them into the 200 ms frames recommended by OpenAI, and the
 network-send queue retains three provider frames (600 ms). Provider output is
-split back into 20 ms blocks; its receive queue retains 25 blocks (500 ms) and
-translated playback is limited to four blocks (80 ms).
+split back into 20 ms blocks; its receive queue retains 150 blocks (3,000 ms) and
+translated playback is limited to twelve blocks (240 ms).
 Network writes and translated playback run in separate tasks, so neither
 WebSocket backpressure nor a slow physical output can block reception of audio,
 transcripts, or control events. Provider audio deltas are split into 20 ms
-blocks before being queued. If the receive cap is reached, its stale backlog is
-discarded as one discontinuity so playback returns to live audio instead of
-accumulating latency; drops and discontinuities are reported by the metrics.
+blocks before being queued. Adaptive, pitch-preserving playout accelerates from
+1.00x up to 1.15x as backlog grows. Before the receive cap is reached, emergency
+recovery searches for a quiet boundary, removes enough stale audio to return
+near the recovery watermark, and crossfades the discontinuity. Drops and
+discontinuities are reported by the metrics.
+
+The queue diagram, watermarks, CSV fields, and support interpretation are
+documented in [CSV metrics reference](metrics-reference.md). Configuration
+semantics and tuning recommendations are in
+[Configuration reference](configuration.md).
 
 Capture is callback-driven: the pipeline sleeps until PortAudio supplies a block
 instead of polling every millisecond. Device reopening runs outside the asyncio
@@ -152,8 +159,29 @@ longer evict the other participant's entire visible history. Clearing the
 transcription still removes both directions together.
 
 Realtime queue and latency metrics are sampled every 10 seconds when application
-metrics are enabled. `[observability.metrics].enabled` is `false` in the shipped
-configuration.
+metrics are enabled. `[observability.metrics].enabled` is `true` in the shipped
+configuration. CSV rows include backlog p50/p95/p99, adaptive speed and maximum
+speed, time-compression ratio, time above the target watermark, silence-boundary
+drops, and separate translated/passthrough playback-drop counters.
+Signal RMS and peaks, callback health, session-gate state, errors, and
+reconnections are stored in the same CSV. Periodic metric snapshots and
+per-utterance latency measurements are not duplicated in `twin-tongue.log`.
+The log retains call/session transitions, retries, unavailable states, buffer
+recovery warnings, device changes, and failures requiring support attention.
+
+The main Realtime support events are intentionally small in number:
+
+- `realtime_call_state_changed`: the calling application became active or inactive;
+- `pipeline_status_changed`: the user-visible state changed;
+- `realtime_translation_connection_failed` or `connection_lost`: a retry started;
+- `realtime_translation_retry_cycle_exhausted`: the cooldown started;
+- `realtime_session_close_timeout` or `close_failed`: graceful shutdown failed;
+- `realtime_translation_backlog_recovered`: emergency audio recovery was required;
+- `realtime_translation_pipeline_failed`: the direction stopped unexpectedly.
+
+Protocol event discovery, WAV-file creation, ordinary queue cleanup, periodic
+measurements, and per-utterance latency are available at `DEBUG`, in Metrics, or
+in the per-call manifest instead of occupying the normal support log.
 
 ## Failure and latency behavior
 
@@ -163,7 +191,17 @@ audio for that call. The disconnect grace keeps AEC3, diagnostics, and the
 session active across brief false-negative Windows observations. When it
 expires, Twin Tongue flushes the local 200 ms framing queue, sends
 `session.close`, drains remaining provider audio and transcripts through
-`session.closed`, and starts the next call with a fresh session.
+`session.closed`, waits for physical playback to empty, and starts the next call
+with a fresh session. During this exclusive `draining` state it does not inject
+passthrough audio into the same output.
+
+Provider audio is split into 20 ms blocks and held in a three-second receive
+buffer with 240 ms of physical playback capacity. Above one second of backlog,
+WSOLA time-scale compression gradually increases playback speed while preserving
+pitch, up to 1.15x near the 2.8-second emergency watermark. If pressure still
+reaches the hard limit, only enough old audio to return to 1.5 seconds is removed,
+preferably at the lowest-energy boundary within 250 ms, followed by a 15 ms
+crossfade.
 
 While a Realtime session is connecting or reconnecting, Twin Tongue preserves the
 existing safety behavior and routes original audio. Reconnection uses bounded,

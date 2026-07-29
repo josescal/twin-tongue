@@ -99,6 +99,7 @@ class DiagnosticWavCapture:
         write_buffer_bytes: int = DEFAULT_WRITE_BUFFER_BYTES,
         flush_interval_seconds: float = DEFAULT_FLUSH_INTERVAL_SECONDS,
         session_id: str | None = None,
+        log_file_creation: bool = True,
     ) -> None:
         if sample_rate <= 0:
             raise ValueError("WAV capture sample rate must be greater than zero.")
@@ -124,6 +125,7 @@ class DiagnosticWavCapture:
         self._write_buffer_bytes = write_buffer_bytes
         self._flush_interval_seconds = flush_interval_seconds
         self._timestamp = session_id or datetime.now().strftime("%Y%m%d-%H%M%S")
+        self._log_file_creation = log_file_creation
         self._file_index = 0
         self._frames_written = 0
         self._writer: wave.Wave_write | None = None
@@ -258,7 +260,8 @@ class DiagnosticWavCapture:
                     "sample_width_bytes": self._sample_width_bytes,
                 }
             )
-        logger.info(
+        log = logger.info if self._log_file_creation else logger.debug
+        log(
             "event=diagnostic_wav_capture_started stream=%s file=%s marks_file=%s "
             "sample_rate=%s channels=%s",
             self._stream_name,
@@ -293,6 +296,7 @@ class QueuedDiagnosticWavCapture:
         write_buffer_bytes: int = DEFAULT_WRITE_BUFFER_BYTES,
         flush_interval_seconds: float = DEFAULT_FLUSH_INTERVAL_SECONDS,
         session_id: str | None = None,
+        log_file_creation: bool = True,
     ) -> None:
         if queue_capacity_blocks <= 0:
             raise ValueError("WAV capture queue capacity must be greater than zero.")
@@ -310,6 +314,7 @@ class QueuedDiagnosticWavCapture:
             write_buffer_bytes=write_buffer_bytes,
             flush_interval_seconds=flush_interval_seconds,
             session_id=session_id,
+            log_file_creation=log_file_creation,
         )
         self._flush_interval_seconds = flush_interval_seconds
         self._queue: Queue[bytes | object] = Queue(maxsize=queue_capacity_blocks)

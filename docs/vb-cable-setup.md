@@ -2,6 +2,10 @@
 
 This guide helps a support technician install and validate the two virtual audio routes used by Twin Tongue on Windows.
 
+After routing passes, use the [Realtime support runbook](support-runbook.md) for
+application incidents. Queue pressure and callback health are explained in the
+[CSV metrics reference](metrics-reference.md).
+
 ## Routing model
 
 See [Audio device and routing architecture](audio-routing-architecture.md) for

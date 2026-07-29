@@ -354,6 +354,7 @@ REQUIRED_OPENAI_REALTIME_KEYS = (
     "log_transcript_deltas",
     "transcript_ui_update_interval_ms",
     "transcript_segment_idle_ms",
+    "adaptive_playout",
     "input_transcription",
     "session_gate",
     "audio_capture",
@@ -908,6 +909,91 @@ def load_config(path: Path) -> dict[str, Any]:
             if not isinstance(openai_realtime["log_transcript_deltas"], bool):
                 raise ConfigurationError(
                     f"{settings_path}.log_transcript_deltas must be a boolean."
+                )
+            adaptive_playout = openai_realtime["adaptive_playout"]
+            _require_keys(
+                adaptive_playout,
+                (
+                    "enabled",
+                    "target_backlog_ms",
+                    "accelerated_backlog_ms",
+                    "emergency_backlog_ms",
+                    "recovery_backlog_ms",
+                    "moderate_speed",
+                    "maximum_speed",
+                    "silence_search_ms",
+                    "silence_threshold_dbfs",
+                    "crossfade_ms",
+                ),
+                f"{settings_path}.adaptive_playout",
+            )
+            if not isinstance(adaptive_playout["enabled"], bool):
+                raise ConfigurationError(
+                    f"{settings_path}.adaptive_playout.enabled must be a boolean."
+                )
+            for key in (
+                "target_backlog_ms",
+                "accelerated_backlog_ms",
+                "emergency_backlog_ms",
+                "recovery_backlog_ms",
+                "silence_search_ms",
+                "crossfade_ms",
+            ):
+                value = adaptive_playout[key]
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or value <= 0
+                ):
+                    raise ConfigurationError(
+                        f"{settings_path}.adaptive_playout.{key} "
+                        "must be greater than zero."
+                    )
+            target_backlog = float(adaptive_playout["target_backlog_ms"])
+            accelerated_backlog = float(
+                adaptive_playout["accelerated_backlog_ms"]
+            )
+            emergency_backlog = float(
+                adaptive_playout["emergency_backlog_ms"]
+            )
+            recovery_backlog = float(
+                adaptive_playout["recovery_backlog_ms"]
+            )
+            if not (
+                target_backlog
+                < recovery_backlog
+                < accelerated_backlog
+                < emergency_backlog
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.adaptive_playout backlog thresholds "
+                    "must satisfy target < recovery < accelerated < emergency."
+                )
+            moderate_speed = adaptive_playout["moderate_speed"]
+            maximum_speed = adaptive_playout["maximum_speed"]
+            if (
+                not isinstance(moderate_speed, (int, float))
+                or isinstance(moderate_speed, bool)
+                or not 1.0 < float(moderate_speed) <= 1.15
+                or not isinstance(maximum_speed, (int, float))
+                or isinstance(maximum_speed, bool)
+                or not float(moderate_speed)
+                <= float(maximum_speed)
+                <= 1.25
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.adaptive_playout speeds must satisfy "
+                    "1.0 < moderate_speed <= maximum_speed <= 1.25."
+                )
+            silence_threshold = adaptive_playout["silence_threshold_dbfs"]
+            if (
+                not isinstance(silence_threshold, (int, float))
+                or isinstance(silence_threshold, bool)
+                or not -120.0 <= float(silence_threshold) <= 0.0
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.adaptive_playout."
+                    "silence_threshold_dbfs must be between -120 and 0."
                 )
             input_transcription = openai_realtime["input_transcription"]
             _require_keys(
