@@ -23,7 +23,7 @@ class DiagnosticCallManifestTests(unittest.TestCase):
 
             path = manifest.close(
                 tracks={"captured": ["captured.wav"]},
-                statistics={"echo_guard": {"suppressed_blocks": 4}},
+                statistics={"aec3": {"capture_frames": 4}},
             )
 
             self.assertIsNotNone(path)
@@ -33,5 +33,5 @@ class DiagnosticCallManifestTests(unittest.TestCase):
             self.assertEqual(["captured.wav"], payload["tracks"]["captured"])
             self.assertTrue(payload["events"][0]["active"])
             self.assertEqual(
-                4, payload["statistics"]["echo_guard"]["suppressed_blocks"]
+                4, payload["statistics"]["aec3"]["capture_frames"]
             )

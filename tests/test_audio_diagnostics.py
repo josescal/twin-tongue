@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from audio.diagnostics import (
+    _assess_physical_path,
     test_microphone as run_microphone_test,
     test_physical_audio_path as run_physical_audio_path_test,
     test_speaker as run_speaker_test,
@@ -13,6 +14,28 @@ from audio.pcm import RecordedAudio
 
 
 class AudioDiagnosticTests(unittest.TestCase):
+    def test_manual_recording_with_clear_peak_and_silent_sections_passes(
+        self,
+    ) -> None:
+        captured = [
+            {"channel": 1, "peak_dbfs": -24.1, "rms_dbfs": -44.4},
+            {"channel": 2, "peak_dbfs": -24.1, "rms_dbfs": -44.4},
+        ]
+        mono = [{"channel": 1, "peak_dbfs": -24.1, "rms_dbfs": -44.4}]
+
+        self.assertEqual("passed", _assess_physical_path(captured, mono))
+
+    def test_physical_path_requires_low_peak_and_rms_for_low_signal(
+        self,
+    ) -> None:
+        captured = [
+            {"channel": 1, "peak_dbfs": -36.0, "rms_dbfs": -55.0},
+            {"channel": 2, "peak_dbfs": -36.0, "rms_dbfs": -55.0},
+        ]
+        mono = [{"channel": 1, "peak_dbfs": -36.0, "rms_dbfs": -55.0}]
+
+        self.assertEqual("low_signal", _assess_physical_path(captured, mono))
+
     def test_physical_path_reuses_stereo_pipeline_capture_and_plays_downmix(
         self,
     ) -> None:
@@ -49,7 +72,7 @@ class AudioDiagnosticTests(unittest.TestCase):
         self.assertEqual("stereo_to_mono_average", result["conversion"])
         self.assertEqual(1, result["pipeline_channels"])
         self.assertEqual(2, result["playback_channels"])
-        self.assertFalse(result["echo_guard_applied"])
+        self.assertFalse(result["aec3_applied"])
         self.assertEqual("passed", result["assessment"])
         self.assertEqual(2, len(result["channel_levels"]))
         self.assertTrue(result["passed"])

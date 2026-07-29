@@ -11,7 +11,7 @@ from collections.abc import Mapping
 import sounddevice as sd
 
 from audio.device_manager import AudioDeviceManager
-from audio.echo_guard import EchoReferenceBus
+from audio.webrtc_aec3 import WebRtcAec3
 from audio.wav_capture import repair_incomplete_wav_headers
 from audio.portaudio import AudioDeviceError
 from audio.voice_detection import VoiceDetectorLoader, preload_voice_detection_package
@@ -238,7 +238,16 @@ async def run_application(args: argparse.Namespace) -> None:
         )
     )
     repair_incomplete_wav_headers(realtime_capture_directory)
-    echo_reference = EchoReferenceBus()
+    aec3_settings = config["audio"]["aec3"]
+    assert isinstance(aec3_settings, dict)
+    aec3 = WebRtcAec3(
+        enabled=bool(aec3_settings["enabled"]),
+        stream_delay_ms=int(aec3_settings["stream_delay_ms"]),
+        render_queue_capacity_blocks=int(
+            aec3_settings["render_queue_capacity_blocks"]
+        ),
+        resampling=config["audio"]["resampling"],
+    )
     if "remote_to_agent" in selected_names:
         selected_pipelines["remote_to_agent"] = DirectionalPipelineSupervisor(
             config=config,
@@ -254,7 +263,7 @@ async def run_application(args: argparse.Namespace) -> None:
             metrics_writer=metrics_writer,
             classic_factory=classic_factory,
             realtime_factory=realtime_factory,
-            echo_reference=echo_reference,
+            aec3=aec3,
         )
     if "agent_to_remote" in selected_names:
         selected_pipelines["agent_to_remote"] = DirectionalPipelineSupervisor(
@@ -271,7 +280,7 @@ async def run_application(args: argparse.Namespace) -> None:
             metrics_writer=metrics_writer,
             classic_factory=classic_factory,
             realtime_factory=realtime_factory,
-            echo_reference=echo_reference,
+            aec3=aec3,
         )
     await device_manager.start()
     web_enabled = bool(server_settings["enabled"]) if args.web is None else args.web

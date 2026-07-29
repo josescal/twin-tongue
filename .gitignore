@@ -25,6 +25,8 @@ packaging/*
 !packaging/certificate/
 !packaging/certificate/INSTALL_CERTIFICATE.ps1
 !packaging/certificate/REMOVE_CERTIFICATE.ps1
+!packaging/licenses/
+!packaging/licenses/AEC_AUDIO_PROCESSING_LICENSE.txt
 !packaging/VBCable_A_B/
 !packaging/VBCable_A_B/VBCABLE_A_B_Driver_Pack45.zip
 .agents/

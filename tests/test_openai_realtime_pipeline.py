@@ -3,14 +3,18 @@
 import asyncio
 from collections.abc import Callable
 import unittest
-from unittest.mock import MagicMock, call
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from app_state import ApplicationState
-from audio.echo_guard import EchoReferenceBus
-from engines.openai_realtime import RealtimeTranslationError
+from audio.speech_latency import StreamingSpeechLatencyTracker
+from engines.openai_realtime import (
+    RealtimeRateLimitCoordinator,
+    RealtimeTranslationError,
+)
 from pipelines.openai_realtime import (
     OpenAIRealtimeTranslatePipeline,
     RealtimeSessionGate,
+    TranslatedAudioBlock,
 )
 
 
@@ -30,6 +34,7 @@ class RealtimeSessionGateTests(unittest.TestCase):
         self.assertFalse(decision.session_required)
         self.assertFalse(decision.audio_allowed)
         self.assertTrue(decision.waiting_for_application)
+        self.assertFalse(decision.call_active)
 
     def test_active_application_allows_connection_and_audio(self) -> None:
         decision = self.gate.evaluate(
@@ -39,6 +44,7 @@ class RealtimeSessionGateTests(unittest.TestCase):
         self.assertTrue(decision.session_required)
         self.assertTrue(decision.audio_allowed)
         self.assertEqual(1, self.gate.activations)
+        self.assertTrue(decision.call_active)
 
     def test_disconnect_keeps_call_continuous_and_closes_after_grace(self) -> None:
         self.gate.evaluate(requested=True, observation=True, now=10.0)
@@ -53,9 +59,11 @@ class RealtimeSessionGateTests(unittest.TestCase):
         self.assertTrue(grace.session_required)
         self.assertTrue(grace.audio_allowed)
         self.assertFalse(grace.waiting_for_application)
+        self.assertTrue(grace.call_active)
         self.assertFalse(expired.session_required)
         self.assertFalse(expired.audio_allowed)
         self.assertTrue(expired.waiting_for_application)
+        self.assertFalse(expired.call_active)
         self.assertEqual(1, self.gate.deactivations)
 
     def test_monitor_failure_is_fail_closed_after_grace(self) -> None:
@@ -80,6 +88,7 @@ class RealtimeSessionGateTests(unittest.TestCase):
 
         self.assertFalse(decision.session_required)
         self.assertFalse(decision.audio_allowed)
+        self.assertTrue(decision.call_active)
 
 
 class OpenAIRealtimePipelineTests(unittest.IsolatedAsyncioTestCase):
@@ -94,15 +103,73 @@ class OpenAIRealtimePipelineTests(unittest.IsolatedAsyncioTestCase):
         self.pipeline.source_language_name = "remote"
         self.pipeline.target_language_name = "agent"
         self.pipeline.control_state = self.state
+        self.pipeline.aec3 = MagicMock()
+        self.pipeline.aec3.process_capture.side_effect = (
+            lambda pcm16, *, sample_rate: pcm16
+        )
+        self.pipeline.aec3.statistics_snapshot.return_value = {}
         self.pipeline._transcript_sequence = 0
         self.pipeline._transcript_queue = asyncio.Queue()
         self.pipeline._log_transcript_deltas = False
         self.pipeline._audio_send_queue = None
         self.pipeline._audio_send_dropped_blocks = 0
+        self.pipeline._accept_translated_audio = False
+        self.pipeline._translated_audio_queue = None
+        self.pipeline._translated_audio_pending_bytes = bytearray()
+        self.pipeline._translated_audio_block_bytes = 4
+        self.pipeline._translated_audio_generation = 0
+        self.pipeline._translated_audio_dropped_blocks = 0
+        self.pipeline._translated_audio_discontinuities = 0
+        self.pipeline._translated_audio_maximum_buffered_blocks = 0
+        self.pipeline._last_status = None
         self.pipeline._input_audio_capture = None
         self.pipeline._accepted_audio_capture = None
         self.pipeline._sent_audio_capture = None
+        self.pipeline._received_audio_capture = None
         self.pipeline._output_audio_capture = None
+        self.pipeline._diagnostic_manifest = None
+        self.pipeline._call_cable_active = True
+        self.pipeline._speech_latency = StreamingSpeechLatencyTracker()
+
+    def test_reconnect_delay_uses_jitter_and_shares_rate_limit_cooldown(
+        self,
+    ) -> None:
+        self.pipeline.config = {
+            "realtime_translation": {
+                "openai": {"reconnect_base_delay_seconds": 2.0}
+            }
+        }
+        coordinator = RealtimeRateLimitCoordinator()
+        self.pipeline._rate_limit_coordinator = coordinator
+
+        with patch(
+            "pipelines.openai_realtime.random.uniform",
+            side_effect=[1.5, 3.0, 1.25],
+        ) as uniform:
+            first = self.pipeline._reconnect_delay(
+                1,
+                RealtimeTranslationError("rate limited"),
+                now=10.0,
+            )
+            second = self.pipeline._reconnect_delay(
+                2,
+                RealtimeTranslationError("HTTP 429"),
+                now=10.5,
+            )
+            ordinary = self.pipeline._reconnect_delay(
+                1,
+                RealtimeTranslationError("connection reset"),
+                now=11.0,
+            )
+
+        self.assertEqual(1.5, first)
+        self.assertEqual(3.0, second)
+        self.assertEqual(1.25, ordinary)
+        self.assertEqual(1.5, coordinator.remaining_delay(now=11.0))
+        self.assertEqual(
+            [call(1.0, 2.0), call(2.0, 4.0), call(1.0, 2.0)],
+            uniform.call_args_list,
+        )
 
     async def test_deltas_are_published_incrementally_and_finalized_after_idle(
         self,
@@ -179,7 +246,7 @@ class OpenAIRealtimePipelineTests(unittest.IsolatedAsyncioTestCase):
         worker = asyncio.create_task(
             self.pipeline._transcript_worker(
                 update_interval_seconds=0.005,
-                segment_idle_seconds=0.02,
+                segment_idle_seconds=0.2,
             )
         )
         try:
@@ -267,6 +334,66 @@ class OpenAIRealtimePipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(pipeline["waiting_for_call"])
         self.assertTrue(self.pipeline._accept_translated_audio)
 
+    async def test_cached_status_overwrites_external_switching_state(self) -> None:
+        self.pipeline._last_status = "waiting_for_call"
+        await self.state.set_pipeline_status(
+            "remote_to_agent",
+            "waiting_for_call",
+        )
+        await self.state.set_mode("remote_to_agent", "translate")
+        self.assertEqual(
+            "switching",
+            self.state.get_pipeline_status("remote_to_agent").value,
+        )
+
+        await self.pipeline._set_status("waiting_for_call")
+
+        self.assertEqual(
+            "waiting_for_call",
+            self.state.get_pipeline_status("remote_to_agent").value,
+        )
+
+    async def test_waiting_gate_does_not_accept_call_audio(
+        self,
+    ) -> None:
+        await self.state.set_mode("remote_to_agent", "translate")
+        self.pipeline._last_status = "initializing"
+        self.pipeline._accept_translated_audio = True
+
+        await self.pipeline._reconcile_gate_status(
+            self.pipeline_gate_decision(
+                session_required=False,
+                audio_allowed=False,
+                waiting_for_application=True,
+            ),
+            session_usable=True,
+        )
+
+        pipeline = self.state.snapshot()["pipelines"]["remote_to_agent"]
+        self.assertEqual("passthrough", pipeline["status"])
+        self.assertTrue(pipeline["waiting_for_call"])
+        self.assertEqual("waiting_for_call", self.pipeline._last_status)
+        self.assertFalse(self.pipeline._accept_translated_audio)
+
+    async def test_waiting_gate_preserves_audio_during_graceful_drain(
+        self,
+    ) -> None:
+        await self.state.set_mode("remote_to_agent", "translate")
+        self.pipeline._accept_translated_audio = True
+
+        await self.pipeline._reconcile_gate_status(
+            self.pipeline_gate_decision(
+                session_required=False,
+                audio_allowed=False,
+                waiting_for_application=True,
+            ),
+            session_usable=False,
+            draining=True,
+        )
+
+        self.assertTrue(self.pipeline._accept_translated_audio)
+        self.assertEqual("waiting_for_call", self.pipeline._last_status)
+
     async def test_audio_send_queue_drops_oldest_block_to_preserve_latency(self) -> None:
         self.pipeline._audio_send_queue = asyncio.Queue(maxsize=2)
 
@@ -277,6 +404,23 @@ class OpenAIRealtimePipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, self.pipeline._audio_send_dropped_blocks)
         self.assertEqual(b"middle", self.pipeline._audio_send_queue.get_nowait())
         self.assertEqual(b"newest", self.pipeline._audio_send_queue.get_nowait())
+
+    async def test_discarded_audio_queues_complete_join_accounting(self) -> None:
+        self.pipeline._audio_send_queue = asyncio.Queue()
+        self.pipeline._audio_send_queue.put_nowait(b"pending-input")
+        self.pipeline._translated_audio_queue = asyncio.Queue()
+        self.pipeline._translated_audio_queue.put_nowait(
+            TranslatedAudioBlock(b"pending-output", generation=0)
+        )
+
+        self.pipeline._discard_audio_send_queue("test")
+        self.pipeline._discard_translated_audio_queue("test")
+
+        await asyncio.wait_for(self.pipeline._audio_send_queue.join(), timeout=0.1)
+        await asyncio.wait_for(
+            self.pipeline._translated_audio_queue.join(),
+            timeout=0.1,
+        )
 
     async def test_audio_sender_reports_failure_without_raising_to_pipeline(self) -> None:
         class FailedSession:
@@ -321,7 +465,35 @@ class OpenAIRealtimePipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([b"\x01\x00\x02\x00"], session.blocks)
         sent_capture.write.assert_called_once_with(b"\x01\x00\x02\x00")
 
-    async def test_raw_input_is_recorded_continuously_for_echo_diagnostics(self) -> None:
+    async def test_source_end_flushes_local_audio_before_graceful_close(
+        self,
+    ) -> None:
+        session = MagicMock()
+        session.close_timeout_seconds = 0.5
+        session.send_audio = AsyncMock()
+        session.close = AsyncMock()
+        session.abort = AsyncMock()
+        input_resampler = MagicMock()
+        input_resampler.process.return_value = (b"final-partial-frame",)
+        self.pipeline._audio_send_queue = asyncio.Queue(maxsize=3)
+        self.pipeline._translated_audio_queue = None
+        sender = asyncio.create_task(
+            self.pipeline._audio_sender(session)
+        )
+
+        await self.pipeline._close_session_after_source_end(
+            session,
+            input_resampler,
+        )
+        self.pipeline._audio_send_queue.put_nowait(None)
+        await sender
+
+        input_resampler.process.assert_called_once_with(b"", final=True)
+        session.send_audio.assert_awaited_once_with(b"final-partial-frame")
+        session.close.assert_awaited_once_with()
+        session.abort.assert_not_awaited()
+
+    async def test_raw_input_is_recorded_during_call_in_both_modes(self) -> None:
         input_capture = MagicMock()
         self.pipeline._input_audio_capture = input_capture
 
@@ -339,6 +511,48 @@ class OpenAIRealtimePipelineTests(unittest.IsolatedAsyncioTestCase):
             input_capture.write.call_args_list,
         )
 
+    async def test_diagnostic_tracks_are_not_written_without_an_active_call(
+        self,
+    ) -> None:
+        input_capture = MagicMock()
+        accepted_capture = MagicMock()
+        sent_capture = MagicMock()
+        received_capture = MagicMock()
+        output_capture = MagicMock()
+        self.pipeline._input_audio_capture = input_capture
+        self.pipeline._accepted_audio_capture = accepted_capture
+        self.pipeline._sent_audio_capture = sent_capture
+        self.pipeline._received_audio_capture = received_capture
+        self.pipeline._output_audio_capture = output_capture
+        self.pipeline._call_cable_active = False
+
+        self.pipeline._record_captured_audio(b"captured")
+        self.pipeline._record_accepted_audio(b"accepted")
+        self.pipeline._record_sent_audio(b"sent")
+        self.pipeline._record_received_audio(b"received")
+        self.pipeline._record_played_audio(b"\x01\x00", channels=1)
+
+        input_capture.write.assert_not_called()
+        accepted_capture.write.assert_not_called()
+        sent_capture.write.assert_not_called()
+        received_capture.write.assert_not_called()
+        output_capture.write.assert_not_called()
+
+    async def test_ending_call_closes_each_diagnostic_track(self) -> None:
+        captures = [MagicMock() for _ in range(5)]
+        (
+            self.pipeline._input_audio_capture,
+            self.pipeline._accepted_audio_capture,
+            self.pipeline._sent_audio_capture,
+            self.pipeline._received_audio_capture,
+            self.pipeline._output_audio_capture,
+        ) = captures
+
+        self.pipeline._set_call_cable_active(False)
+
+        for capture in captures:
+            capture.close_session.assert_called_once_with()
+
     async def test_translated_output_is_queued_before_played_callback_records_it(self) -> None:
         translated_output = MagicMock()
         translated_output.buffered_blocks = 0
@@ -348,15 +562,23 @@ class OpenAIRealtimePipelineTests(unittest.IsolatedAsyncioTestCase):
         translated_resampler = MagicMock()
         translated_resampler.process.return_value = [b"\x01\x00\x02\x00"]
         output_capture = MagicMock()
+        received_capture = MagicMock()
         self.pipeline._accept_translated_audio = True
         self.pipeline._translated_output = translated_output
         self.pipeline._translated_resampler = translated_resampler
         self.pipeline._translated_output_channels = 1
         self.pipeline._output_audio_capture = output_capture
+        self.pipeline._received_audio_capture = received_capture
+        self.pipeline._translated_audio_queue = asyncio.Queue(maxsize=2)
+        worker = asyncio.create_task(self.pipeline._translated_audio_worker())
 
-        await self.pipeline._handle_translated_audio(b"\x03\x00")
+        self.pipeline._enqueue_translated_audio(b"\x03\x00\x04\x00")
+        await asyncio.sleep(0)
+        self.pipeline._translated_audio_queue.put_nowait(None)
+        await worker
 
         output_capture.write.assert_not_called()
+        received_capture.write.assert_called_once_with(b"\x03\x00\x04\x00")
         translated_output.push_block.assert_called_once_with(
             b"\x01\x00\x02\x00"
         )
@@ -373,30 +595,122 @@ class OpenAIRealtimePipelineTests(unittest.IsolatedAsyncioTestCase):
         self.pipeline._translated_output = translated_output
         self.pipeline._translated_resampler = translated_resampler
         self.pipeline._translated_output_channels = 1
+        self.pipeline._translated_audio_queue = asyncio.Queue(maxsize=2)
 
-        handler = asyncio.create_task(
-            self.pipeline._handle_translated_audio(b"\x03\x00")
+        worker = asyncio.create_task(
+            self.pipeline._translated_audio_worker()
         )
+        self.pipeline._enqueue_translated_audio(b"\x03\x00\x04\x00")
         await asyncio.sleep(0.01)
-        self.assertFalse(handler.done())
+        self.assertFalse(worker.done())
+        translated_output.push_block.assert_not_called()
         translated_output.buffered_blocks = 0
-        await handler
+        await asyncio.sleep(0.01)
+        self.pipeline._translated_audio_queue.put_nowait(None)
+        await worker
 
         translated_output.push_block.assert_called_once_with(b"\x01\x00")
 
-    async def test_actual_remote_playback_is_the_echo_reference(self) -> None:
+    async def test_websocket_callback_returns_while_playback_is_full(self) -> None:
+        self.pipeline._accept_translated_audio = True
+        self.pipeline._translated_audio_queue = asyncio.Queue(maxsize=2)
+
+        self.pipeline._enqueue_translated_audio(b"\x01\x00\x02\x00")
+
+        queued = self.pipeline._translated_audio_queue.get_nowait()
+        self.assertEqual(
+            TranslatedAudioBlock(b"\x01\x00\x02\x00", generation=0),
+            queued,
+        )
+
+    async def test_provider_delta_is_split_into_twenty_millisecond_blocks(
+        self,
+    ) -> None:
+        block_bytes = 960
+        self.pipeline._translated_audio_block_bytes = block_bytes
+        self.pipeline._translated_audio_queue = asyncio.Queue(maxsize=25)
+        self.pipeline._accept_translated_audio = True
+        delta = b"".join(
+            index.to_bytes(2, "little") * (block_bytes // 2)
+            for index in range(20)
+        )
+
+        self.pipeline._enqueue_translated_audio(delta)
+
+        self.assertEqual(20, self.pipeline._translated_audio_queue.qsize())
+        queued = [
+            self.pipeline._translated_audio_queue.get_nowait()
+            for _ in range(20)
+        ]
+        self.assertEqual(
+            [index.to_bytes(2, "little") for index in range(20)],
+            [item.pcm16[:2] for item in queued if item is not None],
+        )
+        self.assertEqual(
+            20,
+            self.pipeline._translated_audio_maximum_buffered_blocks,
+        )
+        self.assertEqual(0, self.pipeline._translated_audio_dropped_blocks)
+
+    async def test_received_queue_overflow_discards_stale_generation(self) -> None:
+        self.pipeline._translated_audio_queue = asyncio.Queue(maxsize=2)
+        self.pipeline._accept_translated_audio = True
+
+        self.pipeline._enqueue_translated_audio(
+            b"\x01\x00\x01\x00"
+            b"\x02\x00\x02\x00"
+            b"\x03\x00\x03\x00"
+        )
+
+        self.assertEqual(1, self.pipeline._translated_audio_generation)
+        self.assertEqual(2, self.pipeline._translated_audio_dropped_blocks)
+        self.assertEqual(1, self.pipeline._translated_audio_discontinuities)
+        queued = self.pipeline._translated_audio_queue.get_nowait()
+        self.assertEqual(b"\x03\x00\x03\x00", queued.pcm16)
+        self.assertEqual(1, queued.generation)
+
+    async def test_disabling_translation_invalidates_in_flight_audio(self) -> None:
+        translated_output = MagicMock()
+        translated_output.buffered_blocks = 1
+        translated_output.queue_capacity_blocks = 1
+        translated_output.frames_per_block = 960
+        translated_output.sample_rate = 48_000
+        translated_resampler = MagicMock()
+        translated_resampler.process.return_value = [b"\x01\x00"]
+        self.pipeline._accept_translated_audio = True
+        self.pipeline._translated_output = translated_output
+        self.pipeline._translated_resampler = translated_resampler
+        self.pipeline._translated_output_channels = 1
+        self.pipeline._translated_audio_queue = asyncio.Queue(maxsize=2)
+        worker = asyncio.create_task(self.pipeline._translated_audio_worker())
+        self.pipeline._enqueue_translated_audio(b"\x03\x00\x04\x00")
+        await asyncio.sleep(0.01)
+
+        self.pipeline._set_translation_audio_acceptance(False)
+        translated_output.buffered_blocks = 0
+        await asyncio.sleep(0.01)
+        self.pipeline._translated_audio_queue.put_nowait(None)
+        await worker
+
+        translated_output.push_block.assert_not_called()
+        self.assertEqual(1, self.pipeline._translated_audio_generation)
+
+    async def test_actual_remote_playback_is_the_aec3_render_reference(self) -> None:
         output_capture = MagicMock()
-        reference = EchoReferenceBus()
+        aec3 = MagicMock()
         self.pipeline.pipeline_name = "remote_to_agent"
-        self.pipeline.echo_reference = reference
+        self.pipeline.aec3 = aec3
         self.pipeline._output_audio_capture = output_capture
         stereo = b"\x10\x00\x10\x00" * 960
 
         self.pipeline._record_played_audio(stereo, channels=2)
 
         output_capture.write.assert_called_once_with(stereo)
-        self.assertEqual(1, reference.reference_blocks)
-        self.assertGreater(reference.snapshot()[1], -96.0)
+        aec3.observe_render.assert_called_once_with(
+            stereo,
+            sample_rate=48_000,
+            channels=2,
+        )
 
     @staticmethod
     def pipeline_gate_decision(

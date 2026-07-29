@@ -102,6 +102,7 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn('audioTestStartsIn: "La grabación empieza en"', decoded_page)
         self.assertIn("setAudioDevice", decoded_page)
+        self.assertIn("incomingRevision < currentRevision", decoded_page)
         self.assertIn('data-cable-route="remote_input"', decoded_page)
         self.assertIn("Call speaker", decoded_page)
         self.assertIn("Altavoz de la llamada", decoded_page)
@@ -140,6 +141,8 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Transcripción de la conversación", decoded_page)
         self.assertIn("justify-self: start", decoded_page)
         self.assertIn("justify-self: end", decoded_page)
+        self.assertIn('timestamp.className = "transcript-timestamp"', decoded_page)
+        self.assertIn("timestamp: entry.timestamp ||", decoded_page)
         self.assertIn(
             'classList.toggle("translation-only", !hasSourceText)', decoded_page
         )
@@ -405,7 +408,7 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
             "captured_channels": 2,
             "pipeline_channels": 1,
             "playback_channels": 2,
-            "echo_guard_applied": False,
+            "aec3_applied": False,
             "assessment": "passed",
             "passed": True,
         }

@@ -22,6 +22,8 @@ SPEAKER_TEST_SECONDS = 0.45
 PHYSICAL_PATH_TEST_MAX_SECONDS = 10.0
 TEST_TONE_FREQUENCY_HZ = 660.0
 TEST_TONE_AMPLITUDE = 0.18
+LOW_SIGNAL_PEAK_DBFS = -30.0
+LOW_SIGNAL_RMS_DBFS = -50.0
 
 
 def test_physical_audio_path(
@@ -98,7 +100,7 @@ def test_physical_audio_path(
         "pipeline_channels": downmixed.channels,
         "playback_channels": monitor_audio.channels,
         "conversion": conversion,
-        "echo_guard_applied": False,
+        "aec3_applied": False,
         "channel_levels": captured_levels,
         "downmixed_level": mono_levels[0],
         "assessment": assessment,
@@ -294,7 +296,13 @@ def _assess_physical_path(
         return "downmix_cancellation"
     if strongest_peak >= -1.0:
         return "clipping"
-    if mono_peak < -24.0 or mono_rms < -42.0:
+    # Full-recording RMS includes silence and therefore falls as the user
+    # waits before stopping the manual test. Treat the path as low only when
+    # both the spoken peak and the average level are weak.
+    if (
+        mono_peak < LOW_SIGNAL_PEAK_DBFS
+        and mono_rms < LOW_SIGNAL_RMS_DBFS
+    ):
         return "low_signal"
     if len(captured_levels) == 2:
         rms_difference = abs(

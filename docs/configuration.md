@@ -87,9 +87,11 @@ selected direction must be enabled.
 endpoint = "wss://api.openai.com/v1/realtime/translations"
 model = "gpt-realtime-translate"
 sample_rate = 24000
-send_chunk_duration_ms = 20
+send_chunk_duration_ms = 200
 input_queue_capacity_blocks = 25
-playback_queue_capacity_blocks = 25
+send_queue_capacity_frames = 3
+received_queue_capacity_blocks = 25
+playback_queue_capacity_blocks = 4
 reconnect_max_attempts = 5
 reconnect_base_delay_seconds = 0.5
 reconnect_cooldown_seconds = 10.0
@@ -100,6 +102,10 @@ log_transcript_deltas = false
 transcript_ui_update_interval_ms = 150
 transcript_segment_idle_ms = 500
 
+[pipeline.speech_to_speech.defaults.translation.openai_realtime.input_transcription]
+enabled = true
+model = "gpt-realtime-whisper"
+
 [pipeline.speech_to_speech.defaults.translation.openai_realtime.audio_capture]
 enabled = true
 directory = "logs/realtime-audio"
@@ -109,16 +115,10 @@ queue_capacity_blocks = 500
 write_buffer_kb = 64
 flush_interval_seconds = 1.0
 
-[pipeline.speech_to_speech.defaults.translation.openai_realtime.audio_capture.echo_guard]
-enabled = false
-reference_activity_dbfs = -48.0
-near_end_override_dbfs = -26.0
-post_reference_override_dbfs = -38.0
-near_end_hold_ms = 800.0
-hangover_ms = 350.0
-correlation_window_ms = 200.0
-reference_delay_max_ms = 500.0
-correlation_threshold = 0.72
+[audio.aec3]
+enabled = true
+stream_delay_ms = 0
+render_queue_capacity_blocks = 100
 
 [pipeline.speech_to_speech.defaults.translation.openai_realtime.session_gate]
 enabled = true
@@ -127,31 +127,42 @@ disconnect_grace_seconds = 3.0
 
 Realtime requires 24 kHz mono PCM16 at the provider boundary. Capture and output
 devices keep their directional runtime formats; Twin Tongue resamples between
-them. When diagnostic capture is enabled it writes four explicit tracks:
+them. When diagnostic capture is enabled it writes five explicit tracks:
 `captured` is raw endpoint PCM (including CABLE A in passthrough), `accepted` is
-canonical mono PCM after the optional echo guard, `sent` is 24 kHz PCM successfully sent to OpenAI,
-and `played` is the PCM actually delivered by the PortAudio output callback.
-Echo Guard is disabled by default while low-level microphone capture is being
-validated. When enabled, it uses that callback-delivered `remote_to_agent` playback as its
-far-end reference, so translated audio heard by the microphone is compared
-against the translated signal rather than the original CABLE A input.
-It holds `agent_to_remote` input for the configured correlation window, compares
-its level envelope against delayed playback references, and suppresses only
-audio that reaches the configured correlation threshold. Uncorrelated
-microphone audio is preserved for the downstream VAD, including weak speech.
-This adds 200 ms with the default settings while rejecting delayed acoustic
-playback leakage.
-Translated output applies asynchronous backpressure at the playback queue
-capacity; provider bursts wait for the PortAudio callback instead of discarding
-older speech blocks.
+canonical mono PCM after WebRTC AEC3 on the microphone direction, `sent` is
+24 kHz PCM successfully sent to OpenAI, `received` is the translated 24 kHz
+PCM returned by OpenAI before local conversion, and `played` is the PCM
+actually delivered by the PortAudio output callback.
+AEC3 uses callback-delivered `remote_to_agent` playback as its reverse-stream
+reference, so it receives the translated signal actually heard locally rather
+than the original CABLE A input. Twin Tongue converts its 20 ms blocks into
+10 ms WebRTC frames and resets adaptive state between calls. Set `enabled =
+false` only to compare the raw microphone route during diagnosis.
+Capture and translated-output queues retain the application's 20 ms blocks.
+Input sent to OpenAI is accumulated into the provider's documented 200 ms
+engine frames. The network-send queue retains three such frames (600 ms), while
+the provider-receive queue retains 25 internal blocks (500 ms) and translated
+playback retains four (80 ms). Asynchronous backpressure makes provider bursts
+wait for the PortAudio callback instead of discarding older speech blocks.
 Timing JSONL files and an atomic per-call manifest record devices, formats,
-timeline events and echo-guard counters. WAV headers are refreshed on every
-buffer flush so a `sent` file remains readable after an abnormal exit. The
-session gate opens one independent OpenAI session per
-active direction only while an external application is connected to that
-direction's cable.
+timeline events and AEC3 counters. WAV headers are refreshed on every
+buffer flush so a `sent` file remains readable after an abnormal exit. Enabling
+translation arms a direction, but its OpenAI session opens only when the session
+gate confirms an attached call application. Audio then streams continuously,
+including silence. When the stabilized call ends, Twin Tongue flushes its local
+resampler and send queue, sends `session.close`, receives the remaining audio and
+transcript events through `session.closed`, and creates a fresh session for the
+next call. Directional sessions isolate transport and runtime state, but share
+the applicable OpenAI organization/project/model quota.
 
-Five fast retries use exponential backoff. Exhausting them marks translation
+Source-language captions are optional and enabled by default through
+`input_transcription.model = "gpt-realtime-whisper"`. Set `enabled = false` to
+run translation without the additional transcription model. Its usage and
+applicable model quota are independent from `gpt-realtime-translate`.
+
+Five fast retries use randomized exponential backoff. A rate-limit error extends
+a shared cooldown for both directions so they do not reconnect in lockstep
+against the same quota. Exhausting the fast attempts marks translation
 unavailable, preserves original-audio passthrough, waits 10 seconds, and starts a
 new retry cycle.
 

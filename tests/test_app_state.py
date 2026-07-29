@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from app_state import ApplicationState, PipelineMode, TranslationEngine, VoiceGender
 from twin_tongue_version import __version__
@@ -267,6 +268,7 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("complete", entry["translation_status"])
         self.assertEqual("es", entry["source_language"])
         self.assertEqual("en", entry["target_language"])
+        self.assertRegex(entry["timestamp"], r"^\d{2}:\d{2}:\d{2}$")
 
     async def test_untranslated_final_can_be_marked_unavailable(self) -> None:
         state = ApplicationState()
@@ -281,18 +283,23 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_realtime_transcript_is_updated_in_place_and_finalized(self) -> None:
         state = ApplicationState()
 
-        state.publish_realtime_transcript(
-            "remote_to_agent", 7, "Hello", "", "en", "es"
-        )
-        state.publish_realtime_transcript(
-            "remote_to_agent", 7, "Hello there", "Hola", "en", "es"
-        )
+        with patch(
+            "app_state._transcript_timestamp",
+            side_effect=["12:34:56", "12:35:10"],
+        ):
+            state.publish_realtime_transcript(
+                "remote_to_agent", 7, "Hello", "", "en", "es"
+            )
+            state.publish_realtime_transcript(
+                "remote_to_agent", 7, "Hello there", "Hola", "en", "es"
+            )
 
         entries = state.snapshot()["transcription"]["entries"]
         self.assertEqual(1, len(entries))
         self.assertEqual("Hello there", entries[0]["source_text"])
         self.assertEqual("Hola", entries[0]["translated_text"])
         self.assertEqual("pending", entries[0]["translation_status"])
+        self.assertEqual("12:34:56", entries[0]["timestamp"])
 
         state.publish_realtime_transcript(
             "remote_to_agent",
@@ -358,19 +365,57 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
         entries = state.snapshot()["transcription"]["entries"]
         self.assertEqual(2, len(entries))
 
-    async def test_transcription_is_bounded_and_can_be_cleared(self) -> None:
+    async def test_transcription_is_bounded_per_direction_and_can_be_cleared(
+        self,
+    ) -> None:
         state = ApplicationState()
+        for transcript_id in range(5):
+            state.publish_transcript_final(
+                "remote_to_agent", transcript_id, f"Phrase {transcript_id}", "en", "es"
+            )
         for transcript_id in range(60):
             state.publish_transcript_final(
                 "agent_to_remote", transcript_id, f"Frase {transcript_id}", "es", "en"
             )
 
         entries = state.snapshot()["transcription"]["entries"]
-        self.assertEqual(50, len(entries))
-        self.assertEqual(10, entries[0]["id"])
+        remote_entries = [
+            entry for entry in entries if entry["pipeline"] == "remote_to_agent"
+        ]
+        agent_entries = [
+            entry for entry in entries if entry["pipeline"] == "agent_to_remote"
+        ]
+        self.assertEqual(55, len(entries))
+        self.assertEqual([0, 1, 2, 3, 4], [entry["id"] for entry in remote_entries])
+        self.assertEqual(50, len(agent_entries))
+        self.assertEqual(10, agent_entries[0]["id"])
 
         snapshot = await state.clear_transcription()
         self.assertEqual([], snapshot["transcription"]["entries"])
+
+    async def test_transcription_retains_fifty_entries_for_each_direction(
+        self,
+    ) -> None:
+        state = ApplicationState()
+        for transcript_id in range(60):
+            state.publish_transcript_final(
+                "remote_to_agent", transcript_id, f"Phrase {transcript_id}", "en", "es"
+            )
+            state.publish_transcript_final(
+                "agent_to_remote", transcript_id, f"Frase {transcript_id}", "es", "en"
+            )
+
+        entries = state.snapshot()["transcription"]["entries"]
+        self.assertEqual(100, len(entries))
+        for pipeline_name in ("remote_to_agent", "agent_to_remote"):
+            directional_entries = [
+                entry for entry in entries if entry["pipeline"] == pipeline_name
+            ]
+            self.assertEqual(50, len(directional_entries))
+            self.assertEqual(
+                list(range(10, 60)),
+                [entry["id"] for entry in directional_entries],
+            )
 
     async def test_same_transcript_id_is_isolated_between_directions(self) -> None:
         state = ApplicationState()

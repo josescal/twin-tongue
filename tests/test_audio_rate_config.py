@@ -6,7 +6,7 @@ import tomllib
 from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parents[1]
-from config import load_config
+from config import ConfigurationError, load_config
 
 
 class AudioRateConfigurationTests(unittest.TestCase):
@@ -66,7 +66,10 @@ class AudioRateConfigurationTests(unittest.TestCase):
             "[pipeline.speech_to_speech.remote_to_agent.translation]\n"
             'engine = "openai_realtime"\n\n'
             "[pipeline.speech_to_speech.remote_to_agent.translation.openai_realtime]\n"
-            "playback_queue_capacity_blocks = 10",
+            "playback_queue_capacity_blocks = 10\n\n"
+            "[pipeline.speech_to_speech.remote_to_agent.translation."
+            "openai_realtime.input_transcription]\n"
+            "enabled = false",
         )
         with TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"
@@ -83,9 +86,17 @@ class AudioRateConfigurationTests(unittest.TestCase):
             ["playback_queue_capacity_blocks"],
         )
         self.assertEqual(
-            10,
+            4,
             config["realtime_translation"]["directions"]["agent_to_remote"]
             ["playback_queue_capacity_blocks"],
+        )
+        self.assertEqual(
+            {
+                "enabled": False,
+                "model": "gpt-realtime-whisper",
+            },
+            config["realtime_translation"]["directions"]["remote_to_agent"]
+            ["input_transcription"],
         )
 
     def test_default_rates_are_explicit_and_consistent(self) -> None:
@@ -94,6 +105,14 @@ class AudioRateConfigurationTests(unittest.TestCase):
         self.assertNotIn("languages", config)
         self.assertEqual(config["audio"]["processing_sample_rate"], 16_000)
         self.assertFalse(config["audio"]["physical_capture_exclusive_mode"])
+        self.assertEqual(
+            {
+                "enabled": True,
+                "stream_delay_ms": 0,
+                "render_queue_capacity_blocks": 100,
+            },
+            config["audio"]["aec3"],
+        )
         self.assertEqual(config["stt"]["sample_rate"], 16_000)
         self.assertEqual(config["stt"]["audio_format"], "pcm_16000")
         self.assertTrue(config["stt"]["include_timestamps"])
@@ -134,15 +153,36 @@ class AudioRateConfigurationTests(unittest.TestCase):
             config["realtime_translation"]["openai"]["model"],
         )
         self.assertEqual(
+            200,
+            config["realtime_translation"]["openai"]["send_chunk_duration_ms"],
+        )
+        self.assertEqual(
             25,
             config["realtime_translation"]["openai"]["input_queue_capacity_blocks"],
         )
         self.assertEqual(
-            10,
+            3,
+            config["realtime_translation"]["openai"]["send_queue_capacity_frames"],
+        )
+        self.assertEqual(
+            25,
+            config["realtime_translation"]["openai"][
+                "received_queue_capacity_blocks"
+            ],
+        )
+        self.assertEqual(
+            4,
             config["realtime_translation"]["openai"]["playback_queue_capacity_blocks"],
         )
         self.assertFalse(
             config["realtime_translation"]["openai"]["log_transcript_deltas"]
+        )
+        self.assertEqual(
+            {
+                "enabled": True,
+                "model": "gpt-realtime-whisper",
+            },
+            config["realtime_translation"]["openai"]["input_transcription"],
         )
         self.assertEqual(
             {
@@ -153,17 +193,6 @@ class AudioRateConfigurationTests(unittest.TestCase):
                 "queue_capacity_blocks": 500,
                 "write_buffer_kb": 64,
                 "flush_interval_seconds": 1.0,
-                "echo_guard": {
-                    "enabled": False,
-                    "reference_activity_dbfs": -48.0,
-                    "near_end_override_dbfs": -26.0,
-                    "post_reference_override_dbfs": -38.0,
-                    "near_end_hold_ms": 800.0,
-                    "hangover_ms": 350.0,
-                    "correlation_window_ms": 200.0,
-                    "reference_delay_max_ms": 500.0,
-                    "correlation_threshold": 0.72,
-                },
             },
             config["realtime_translation"]["openai"]["audio_capture"],
         )
@@ -259,6 +288,21 @@ class AudioRateConfigurationTests(unittest.TestCase):
         self.assertEqual(
             "silero", config["classic_pipeline"]["voice_detection"]["backend"]
         )
+
+    def test_realtime_provider_frame_duration_must_be_two_hundred_ms(self) -> None:
+        source = (ROOT / "config" / "default.toml").read_text(encoding="utf-8")
+        source = source.replace(
+            "send_chunk_duration_ms = 200",
+            "send_chunk_duration_ms = 20",
+        )
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                r"send_chunk_duration_ms must be 200",
+            ):
+                load_config(path)
 
 
 if __name__ == "__main__":

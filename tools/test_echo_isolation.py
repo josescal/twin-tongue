@@ -20,12 +20,19 @@ sys.path.insert(0, str(ROOT / "src"))
 from audio.portaudio import describe_devices  # noqa: E402
 
 
-def _device(fragment: str, direction: str) -> int:
+def _device(reference: str, direction: str) -> int:
+    requested_identifier = (
+        int(reference.strip()) if reference.strip().isdigit() else None
+    )
     matches = [
         item
         for item in describe_devices()
         if item.host_api == "Windows WASAPI"
-        and fragment.casefold() in item.name.casefold()
+        and (
+            item.identifier == requested_identifier
+            if requested_identifier is not None
+            else reference.casefold() in item.name.casefold()
+        )
         and (
             item.max_input_channels > 0
             if direction == "input"
@@ -34,8 +41,8 @@ def _device(fragment: str, direction: str) -> int:
     ]
     if len(matches) != 1:
         raise RuntimeError(
-            f"Expected one WASAPI {direction} matching {fragment!r}, "
-            f"found {[item.name for item in matches]}"
+            f"Expected one WASAPI {direction} matching {reference!r}, "
+            f"found {[(item.identifier, item.name) for item in matches]}"
         )
     return matches[0].identifier
 

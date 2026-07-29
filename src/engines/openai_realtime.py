@@ -31,6 +31,53 @@ class RealtimeTranslationError(ProviderError):
     """Raised when a Realtime translation session cannot continue."""
 
 
+def is_realtime_rate_limit_error(error: BaseException | None) -> bool:
+    """Return whether an exception chain represents an OpenAI rate limit."""
+    current = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        status_code = getattr(current, "status_code", None)
+        response = getattr(current, "response", None)
+        response_status = getattr(response, "status_code", None)
+        if status_code == 429 or response_status == 429:
+            return True
+        message = str(current).casefold()
+        if any(
+            marker in message
+            for marker in (
+                "rate limit",
+                "rate_limit",
+                "rate limited",
+                "too many requests",
+                "status 429",
+                "http 429",
+            )
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+class RealtimeRateLimitCoordinator:
+    """Share a provider rate-limit cooldown across directional sessions."""
+
+    def __init__(self) -> None:
+        self._retry_not_before = 0.0
+
+    def defer(self, delay_seconds: float, *, now: float) -> float:
+        """Extend the shared cooldown and return its remaining duration."""
+        self._retry_not_before = max(
+            self._retry_not_before,
+            now + max(0.0, delay_seconds),
+        )
+        return self.remaining_delay(now=now)
+
+    def remaining_delay(self, *, now: float) -> float:
+        """Return how long every direction must wait before reconnecting."""
+        return max(0.0, self._retry_not_before - now)
+
+
 class WebSocketConnection(Protocol):
     async def send(self, message: str) -> None: ...
 
@@ -53,6 +100,7 @@ class OpenAIRealtimeTranslationSession:
         model: str,
         sample_rate: int,
         safety_identifier: str = "",
+        input_transcription_model: str | None = None,
         session_setup_timeout_seconds: float = 10.0,
         close_timeout_seconds: float = 10.0,
         on_audio: AudioCallback | None = None,
@@ -74,6 +122,13 @@ class OpenAIRealtimeTranslationSession:
             raise ProviderConfigurationError(
                 "OpenAI Realtime translation requires 24000 Hz PCM16 audio."
             )
+        if (
+            input_transcription_model is not None
+            and not input_transcription_model.strip()
+        ):
+            raise ProviderConfigurationError(
+                "OpenAI Realtime input transcription model must not be empty."
+            )
         if session_setup_timeout_seconds <= 0 or close_timeout_seconds <= 0:
             raise ProviderConfigurationError(
                 "OpenAI Realtime setup and close timeouts must be greater than zero."
@@ -83,6 +138,11 @@ class OpenAIRealtimeTranslationSession:
         self.model = model.strip()
         self.sample_rate = sample_rate
         self.safety_identifier = safety_identifier.strip()
+        self.input_transcription_model = (
+            input_transcription_model.strip()
+            if input_transcription_model is not None
+            else None
+        )
         self.session_setup_timeout_seconds = session_setup_timeout_seconds
         self.close_timeout_seconds = close_timeout_seconds
         self.on_audio = on_audio
@@ -166,14 +226,19 @@ class OpenAIRealtimeTranslationSession:
         self._receiver_task = asyncio.create_task(
             self._receive_events(), name="openai realtime translation receiver"
         )
+        input_audio: dict[str, object] = {
+            "noise_reduction": {"type": "near_field"}
+        }
+        if self.input_transcription_model is not None:
+            input_audio["transcription"] = {
+                "model": self.input_transcription_model
+            }
         await self._send_json(
             {
                 "type": "session.update",
                 "session": {
                     "audio": {
-                        "input": {
-                            "noise_reduction": {"type": "near_field"}
-                        },
+                        "input": input_audio,
                         "output": {"language": target_language},
                     }
                 },
@@ -402,6 +467,7 @@ class OpenAIRealtimeTranslationFactory:
         self._config = config
         self._api_key = api_key
         self._safety_identifier = safety_identifier
+        self.rate_limit_coordinator = RealtimeRateLimitCoordinator()
 
     @classmethod
     def from_environment(
@@ -431,12 +497,23 @@ class OpenAIRealtimeTranslationFactory:
                     direction_settings = directions.get(pipeline_name)
                     if isinstance(direction_settings, dict):
                         settings = direction_settings
+        input_transcription = settings["input_transcription"]
+        if not isinstance(input_transcription, dict):
+            raise ProviderConfigurationError(
+                "OpenAI Realtime input_transcription configuration must be a mapping."
+            )
+        input_transcription_model = (
+            str(input_transcription["model"])
+            if bool(input_transcription["enabled"])
+            else None
+        )
         return OpenAIRealtimeTranslationSession(
             api_key=self._api_key,
             endpoint=str(settings["endpoint"]),
             model=str(settings["model"]),
             sample_rate=int(settings["sample_rate"]),
             safety_identifier=self._safety_identifier,
+            input_transcription_model=input_transcription_model,
             session_setup_timeout_seconds=float(
                 settings["session_setup_timeout_seconds"]
             ),

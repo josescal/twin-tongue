@@ -6,6 +6,8 @@ import unittest
 from engines.openai_realtime import (
     MAX_WEBSOCKET_MESSAGE_BYTES,
     OpenAIRealtimeTranslationSession,
+    RealtimeRateLimitCoordinator,
+    is_realtime_rate_limit_error,
 )
 
 
@@ -51,6 +53,7 @@ class OpenAIRealtimeTranslationSessionTests(unittest.IsolatedAsyncioTestCase):
             model="gpt-realtime-translate",
             sample_rate=24_000,
             safety_identifier="safe-user",
+            input_transcription_model="gpt-realtime-whisper",
             on_audio=self.audio.append,
             on_input_transcript=self.input_text.append,
             on_output_transcript=self.output_text.append,
@@ -102,6 +105,10 @@ class OpenAIRealtimeTranslationSessionTests(unittest.IsolatedAsyncioTestCase):
             {"type": "near_field"},
             self.socket.sent[0]["session"]["audio"]["input"]["noise_reduction"],
         )
+        self.assertEqual(
+            {"model": "gpt-realtime-whisper"},
+            self.socket.sent[0]["session"]["audio"]["input"]["transcription"],
+        )
         self.assertEqual("session.input_audio_buffer.append", self.socket.sent[1]["type"])
         self.assertEqual("session.close", self.socket.sent[-1]["type"])
         self.assertEqual([b"\x03\x00"], self.audio)
@@ -120,6 +127,17 @@ class OpenAIRealtimeTranslationSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.session.statistics.first_audio_latency_ms)
         self.assertTrue(self.socket.closed)
 
+    async def test_connect_omits_optional_input_transcription_when_disabled(
+        self,
+    ) -> None:
+        self.session.input_transcription_model = None
+
+        await self.session.connect("es")
+        await self.session.close()
+
+        input_audio = self.socket.sent[0]["session"]["audio"]["input"]
+        self.assertNotIn("transcription", input_audio)
+
     async def test_server_error_is_observable(self) -> None:
         await self.session.connect("fr")
         self.socket.incoming.put_nowait(
@@ -130,6 +148,30 @@ class OpenAIRealtimeTranslationSessionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(1, self.session.statistics.errors)
         self.assertIn("rate limited", str(self.session.last_error))
+        self.assertTrue(is_realtime_rate_limit_error(self.session.last_error))
+
+    def test_rate_limit_detection_follows_wrapped_http_429(self) -> None:
+        class HttpError(Exception):
+            status_code = 429
+
+        try:
+            raise HttpError("request rejected")
+        except HttpError as cause:
+            wrapped = RuntimeError("connection failed")
+            wrapped.__cause__ = cause
+
+        self.assertTrue(is_realtime_rate_limit_error(wrapped))
+        self.assertFalse(
+            is_realtime_rate_limit_error(RuntimeError("connection reset"))
+        )
+
+    def test_rate_limit_coordinator_extends_shared_cooldown(self) -> None:
+        coordinator = RealtimeRateLimitCoordinator()
+
+        self.assertEqual(2.0, coordinator.defer(2.0, now=10.0))
+        self.assertEqual(1.5, coordinator.remaining_delay(now=10.5))
+        self.assertEqual(4.0, coordinator.defer(4.0, now=11.0))
+        self.assertEqual(3.0, coordinator.remaining_delay(now=12.0))
 
     async def test_reconnect_counter_is_separate_from_connections(self) -> None:
         await self.session.connect("ca", reconnecting=True)

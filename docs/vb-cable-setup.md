@@ -6,7 +6,8 @@ This guide helps a support technician install and validate the two virtual audio
 
 See [Audio device and routing architecture](audio-routing-architecture.md) for
 the complete diagram, the exact CABLE B connection to the calling application,
-and the `captured` → Echo Guard → `accepted` → `sent` → `played` diagnostic
+and the `captured` → WebRTC AEC3 → `accepted` → `sent` → `received` → `played`
+diagnostic
 stages.
 
 Each virtual cable has a playback endpoint named `Input` and a recording endpoint named `Output`:

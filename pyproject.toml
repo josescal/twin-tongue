@@ -8,6 +8,7 @@ dynamic = ["version"]
 description = "Bidirectional real-time audio translation for Windows"
 requires-python = ">=3.12"
 dependencies = [
+    "aec-audio-processing>=1.0.1,<2",
     "elevenlabs>=2.58.0,<3",
     "httpx>=0.28,<1",
     "numpy>=2.3,<3",

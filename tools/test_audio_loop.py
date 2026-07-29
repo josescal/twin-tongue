@@ -52,7 +52,7 @@ def parse_args(
 
 
 def _pipeline_downmix(audio: RecordedAudio) -> RecordedAudio:
-    """Apply the same stereo-to-mono conversion used before Echo Guard."""
+    """Apply the same stereo-to-mono conversion used before WebRTC AEC3."""
     if audio.dtype != "int16":
         raise ValueError("--downmix-to-mono requires dtype int16.")
     if audio.channels != 2:

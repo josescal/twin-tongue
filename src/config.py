@@ -282,6 +282,7 @@ REQUIRED_AUDIO_KEYS = (
     "sample_format",
     "frame_duration_ms",
     "device_poll_interval_seconds",
+    "aec3",
     "virtual_cables",
     "resampling",
 )
@@ -341,6 +342,8 @@ REQUIRED_OPENAI_REALTIME_KEYS = (
     "sample_rate",
     "send_chunk_duration_ms",
     "input_queue_capacity_blocks",
+    "send_queue_capacity_frames",
+    "received_queue_capacity_blocks",
     "playback_queue_capacity_blocks",
     "reconnect_max_attempts",
     "reconnect_base_delay_seconds",
@@ -351,6 +354,7 @@ REQUIRED_OPENAI_REALTIME_KEYS = (
     "log_transcript_deltas",
     "transcript_ui_update_interval_ms",
     "transcript_segment_idle_ms",
+    "input_transcription",
     "session_gate",
     "audio_capture",
 )
@@ -404,6 +408,7 @@ def _resolve_schema_v2(raw: dict[str, Any]) -> dict[str, Any]:
         raise ConfigurationError("schema_version must be 2.")
     audio_source = _mapping(raw.get("audio"), "audio")
     resampling_source = _mapping(audio_source.get("resampling"), "audio.resampling")
+    aec3_source = _mapping(audio_source.get("aec3"), "audio.aec3")
     virtual_cables_source = _mapping(
         audio_source.get("virtual_cables"), "audio.virtual_cables"
     )
@@ -589,6 +594,7 @@ def _resolve_schema_v2(raw: dict[str, Any]) -> dict[str, Any]:
         "physical_capture_exclusive_mode": audio_source.get(
             "physical_capture_exclusive_mode", True
         ),
+        "aec3": deepcopy(aec3_source),
         "virtual_cables": {
             "session_monitor": deepcopy(session_monitor_source),
         },
@@ -694,6 +700,32 @@ def load_config(path: Path) -> dict[str, Any]:
     ):
         raise ConfigurationError(
             "audio.physical_capture_exclusive_mode must be a boolean."
+        )
+    aec3 = config["audio"]["aec3"]
+    _require_keys(
+        aec3,
+        ("enabled", "stream_delay_ms", "render_queue_capacity_blocks"),
+        "audio.aec3",
+    )
+    if not isinstance(aec3["enabled"], bool):
+        raise ConfigurationError("audio.aec3.enabled must be a boolean.")
+    stream_delay_ms = aec3["stream_delay_ms"]
+    if (
+        not isinstance(stream_delay_ms, int)
+        or isinstance(stream_delay_ms, bool)
+        or stream_delay_ms < 0
+    ):
+        raise ConfigurationError(
+            "audio.aec3.stream_delay_ms must be a non-negative integer."
+        )
+    render_queue_capacity = aec3["render_queue_capacity_blocks"]
+    if (
+        not isinstance(render_queue_capacity, int)
+        or isinstance(render_queue_capacity, bool)
+        or render_queue_capacity < 1
+    ):
+        raise ConfigurationError(
+            "audio.aec3.render_queue_capacity_blocks must be at least one."
         )
     virtual_cables = config["audio"]["virtual_cables"]
     _require_keys(virtual_cables, ("session_monitor",), "audio.virtual_cables")
@@ -841,9 +873,14 @@ def load_config(path: Path) -> dict[str, Any]:
                 raise ConfigurationError(
                     f"{settings_path}.sample_rate must be 24000."
                 )
+            if openai_realtime["send_chunk_duration_ms"] != 200:
+                raise ConfigurationError(
+                    f"{settings_path}.send_chunk_duration_ms must be 200."
+                )
             for key in (
-                "send_chunk_duration_ms",
                 "input_queue_capacity_blocks",
+                "send_queue_capacity_frames",
+                "received_queue_capacity_blocks",
                 "playback_queue_capacity_blocks",
                 "reconnect_max_attempts",
             ):
@@ -871,6 +908,25 @@ def load_config(path: Path) -> dict[str, Any]:
             if not isinstance(openai_realtime["log_transcript_deltas"], bool):
                 raise ConfigurationError(
                     f"{settings_path}.log_transcript_deltas must be a boolean."
+                )
+            input_transcription = openai_realtime["input_transcription"]
+            _require_keys(
+                input_transcription,
+                ("enabled", "model"),
+                f"{settings_path}.input_transcription",
+            )
+            if not isinstance(input_transcription["enabled"], bool):
+                raise ConfigurationError(
+                    f"{settings_path}.input_transcription.enabled must be a boolean."
+                )
+            transcription_model = input_transcription["model"]
+            if (
+                not isinstance(transcription_model, str)
+                or not transcription_model.strip()
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.input_transcription.model "
+                    "must be a non-empty string."
                 )
             session_gate = openai_realtime["session_gate"]
             _require_keys(
@@ -954,49 +1010,6 @@ def load_config(path: Path) -> dict[str, Any]:
                     f"{settings_path}.audio_capture.flush_interval_seconds "
                     "must be greater than zero."
                 )
-            echo_guard = audio_capture.get("echo_guard", {})
-            if not isinstance(echo_guard, dict):
-                raise ConfigurationError(
-                    f"{settings_path}.audio_capture.echo_guard must be a table."
-                )
-            if not isinstance(echo_guard.get("enabled", True), bool):
-                raise ConfigurationError(
-                    f"{settings_path}.audio_capture.echo_guard.enabled "
-                    "must be a boolean."
-                )
-            for key, default in (
-                ("reference_activity_dbfs", -48.0),
-                ("near_end_override_dbfs", -26.0),
-                ("post_reference_override_dbfs", -38.0),
-                ("near_end_hold_ms", 800.0),
-                ("hangover_ms", 350.0),
-                ("correlation_window_ms", 200.0),
-                ("reference_delay_max_ms", 500.0),
-                ("correlation_threshold", 0.72),
-            ):
-                value = echo_guard.get(key, default)
-                if (
-                    not isinstance(value, (int, float))
-                    or isinstance(value, bool)
-                    or (
-                        key
-                        in {
-                            "hangover_ms",
-                            "near_end_hold_ms",
-                            "correlation_window_ms",
-                            "reference_delay_max_ms",
-                        }
-                        and value < 0
-                    )
-                    or (
-                        key == "correlation_threshold"
-                        and not 0 <= value <= 1
-                    )
-                ):
-                    raise ConfigurationError(
-                        f"{settings_path}.audio_capture.echo_guard.{key} "
-                        "must be a valid number."
-                    )
             for key in (
                 "transcript_ui_update_interval_ms",
                 "transcript_segment_idle_ms",

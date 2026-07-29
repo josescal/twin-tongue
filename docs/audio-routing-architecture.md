@@ -16,7 +16,7 @@ during normal Twin Tongue operation. The complete outgoing route is:
 ```text
 Physical microphone
   -> Twin Tongue captures the microphone
-  -> Echo Guard
+  -> WebRTC AEC3
   -> passthrough or translation
   -> Twin Tongue plays PCM to CABLE-B Input
   -> the VB-CABLE B driver transports it internally
@@ -56,12 +56,11 @@ Use the normal stereo CABLE endpoints. Do not select the 16-channel or
    speaker.
 6. The PortAudio playback callback confirms the PCM that was actually delivered
    to the physical output. That confirmed signal becomes the far-end reference
-   used by Echo Guard in the opposite direction.
+   used by WebRTC AEC3 in the opposite direction.
 
-Using callback-confirmed playback is important: Echo Guard compares the
-microphone with what could really have reached it acoustically, rather than
-with the original CABLE A stream or with translated audio that was generated
-but never played.
+Using callback-confirmed playback is important: AEC3 receives the signal that
+could really have reached the microphone acoustically, rather than the original
+CABLE A stream or translated audio that was generated but never played.
 
 ## Outgoing direction: `agent_to_remote`
 
@@ -71,7 +70,7 @@ but never played.
    CABLE endpoints stay shared because the calling application and Twin Tongue
    must use the two sides simultaneously.
 2. The raw endpoint PCM is written to the diagnostic `captured` track.
-3. The PCM is converted to mono and, when enabled, passed through Echo Guard.
+3. The PCM is converted to mono and, when enabled, processed by WebRTC AEC3.
 4. The resulting canonical mono PCM is written to `accepted`.
 5. In passthrough, this accepted PCM is written directly to `CABLE-B Input`.
    In translation mode, it is resampled and sent to the independent
@@ -81,50 +80,64 @@ but never played.
    already capturing as its microphone/input.
 8. The calling application sends that audio to the remote participant.
 
-The two translation directions use independent sessions. Activating one does
-not automatically activate the other.
+The two translation directions use separate sessions. Activating one does not
+automatically activate the other. Their transport, runtime state, and ordinary
+failures remain isolated, while OpenAI quota and rate-limit cooldowns are shared
+because both sessions use the same project and model capacity.
 
-## Exact Echo Guard position
+## Exact WebRTC AEC3 position
 
-Echo Guard can run only in `agent_to_remote`, after physical microphone capture
-and channel conversion, and before either passthrough or API transmission. It
-is currently disabled by default so low-level local speech cannot be rejected:
+WebRTC AEC3 runs only in `agent_to_remote`, after physical microphone capture
+and channel conversion, and before either passthrough or API transmission:
 
 ```text
-physical capture -> captured -> mono -> optional ECHO GUARD -> accepted
-                                                    |-> passthrough -> CABLE-B Input
-                                                    `-> resample -> sent -> OpenAI
+physical capture -> captured -> mono -> WebRTC AEC3 capture input -> accepted
+                                                         |-> passthrough -> CABLE-B Input
+                                                         `-> resample -> sent -> OpenAI
+                                                                              |
+                                       output <- played <- resample <- received
 ```
 
-The shared echo-reference bus is populated only by audio confirmed as played
-in `remote_to_agent`:
+The AEC3 reverse stream is populated only by audio confirmed as rendered by
+the physical-output callback in `remote_to_agent`. Silence is also reported so
+the render timeline remains continuous:
 
 ```text
 remote_to_agent physical playback callback
-  -> mono reference history
-  -> delayed-envelope correlation
-  -> agent_to_remote Echo Guard decision
+  -> channel conversion / render-rate adaptation
+  -> 10 ms WebRTC AEC3 reverse-stream frames
+  -> adaptive echo estimate
+                           physical microphone
+                             -> mono
+                             -> 10 ms WebRTC AEC3 capture frames
+                             -> echo-cancelled accepted audio
 ```
 
-When explicitly enabled, Echo Guard:
+The adapter around WebRTC:
 
-- buffers a 200 ms microphone window;
-- searches the playback-reference history over delays up to 500 ms;
-- suppresses a block only when its level envelope reaches the configured
-  correlation threshold;
-- preserves weak microphone audio when it is not correlated with far-end
-  playback, leaving speech/noise classification to the downstream VAD;
-- records correlation, suppression, and near-end counters in the call
-  manifest.
+- converts both paths to the mono PCM format expected by this integration;
+- splits the application's 20 ms audio blocks into WebRTC's 10 ms frames;
+- resamples the render reference if its physical output rate differs from the
+  microphone rate;
+- supplies the configured external stream delay;
+- resets adaptive state at call start and end so one call cannot contaminate
+  the next;
+- bypasses cancellation without altering the capture block if the native
+  processor reports an error.
 
-This is a reference-driven echo guard, not a full adaptive acoustic echo
-canceller that estimates and subtracts the room impulse response.
+Echo estimation and cancellation are performed by WebRTC Audio Processing's
+native AEC3 implementation. Twin Tongue does not implement its own correlation
+threshold or suppression algorithm. The integration follows WebRTC's
+[AEC3 render/capture contract](https://webrtc.googlesource.com/src/+/refs/heads/main/modules/audio_processing/aec3/echo_canceller3.h)
+through the
+[`aec-audio-processing`](https://pypi.org/project/aec-audio-processing/)
+native binding.
 
 The Realtime insertion point is implemented in
 [`src/pipelines/openai_realtime.py`](../src/pipelines/openai_realtime.py), and
-the correlation decision is implemented in
-[`src/audio/echo_guard.py`](../src/audio/echo_guard.py). The Classic pipeline
-uses the same logical position and shared reference.
+the WebRTC framing and integration adapter is implemented in
+[`src/audio/webrtc_aec3.py`](../src/audio/webrtc_aec3.py). The Classic pipeline
+uses the same shared AEC3 instance and logical position.
 
 ## Call-aware session gate
 
@@ -136,19 +149,25 @@ endpoints:
 - `agent_to_remote` watches the calling application capturing from
   `CABLE-B Output`.
 
-Enabling translation arms the direction, but its API session is opened only
-when the corresponding application session is active. Passthrough remains
-local and does not require an API session.
+Enabling translation arms the direction without opening an API session. The
+session opens when the corresponding application session becomes active and
+receives continuous audio, including silence, for that stabilized call. The
+configured disconnect grace keeps the call state stable for AEC3 and diagnostics
+during short Windows monitoring gaps. When the grace expires, Twin Tongue
+flushes the input and closes the provider session gracefully before a future
+call receives a new session. Passthrough remains local and does not require an
+API session.
 
 ## Diagnostic audio stages
 
-Each direction separates the evidence into four tracks:
+Each direction separates the evidence into five tracks:
 
 | Track | Exact meaning |
 |---|---|
 | `captured` | Raw PCM received from the input endpoint. For `agent_to_remote`, this is the physical microphone; for `remote_to_agent`, this is CABLE A. |
-| `accepted` | Canonical mono PCM after the optional Echo Guard. The guard can be active only for `agent_to_remote` and is disabled by default. |
+| `accepted` | Canonical mono PCM after WebRTC AEC3 for `agent_to_remote`; canonical mono input for `remote_to_agent`. |
 | `sent` | PCM successfully written to the translation provider. It is normally empty in passthrough. |
+| `received` | Translated 24 kHz PCM received from the provider before local resampling and output buffering. |
 | `played` | PCM confirmed by the output callback: physical playback for `remote_to_agent`, or PCM written to CABLE B for `agent_to_remote`. |
 
 Diagnostic capture also includes:
@@ -156,12 +175,13 @@ Diagnostic capture also includes:
 - CABLE A recording even while the direction is in passthrough;
 - JSONL timing marks for each track;
 - a per-call JSON manifest with devices, formats, opening/closing times,
-  gate events, track paths, queue counters, and Echo Guard statistics;
+  gate events, track paths, queue counters, AEC3 statistics, and per-intervention
+  `accepted → sent → received → played` voice-onset latency;
 - periodic WAV-header refresh and startup repair for files left incomplete by
   an abnormal shutdown.
 
 These stages make it possible to determine whether a signal was lost at the
-physical endpoint, rejected by Echo Guard, not sent to the provider, or not
+physical endpoint, changed by AEC3, not sent to the provider, or not
 delivered to the output device.
 
 ## Device resilience and latency protection
@@ -179,7 +199,8 @@ The integrated audio protections are:
 - bounded asynchronous capture, network-send, and playback queues;
 - dropping of stale/backlogged audio rather than emitting an old translation
   late;
-- independent session, retry, and status handling for each direction.
+- separate session and status handling for each direction, with coordinated
+  rate-limit cooldowns across both directions.
 
 ## Windows settings that must remain disabled
 

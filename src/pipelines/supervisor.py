@@ -6,7 +6,7 @@ from pathlib import Path
 
 from app_state import ApplicationState, TranslationEngine
 from audio.device_manager import AudioDeviceManager
-from audio.echo_guard import EchoReferenceBus
+from audio.webrtc_aec3 import WebRtcAec3
 from audio.voice_detection import VoiceDetectorLoader
 from engines.openai_realtime import OpenAIRealtimeTranslationFactory
 from metrics import CsvMetricsWriter
@@ -42,7 +42,7 @@ class DirectionalPipelineSupervisor:
         metrics_writer: CsvMetricsWriter | None = None,
         classic_factory: ProviderFactory | None = None,
         realtime_factory: OpenAIRealtimeTranslationFactory | None = None,
-        echo_reference: EchoReferenceBus | None = None,
+        aec3: WebRtcAec3 | None = None,
     ) -> None:
         self.config = config
         self.env_path = env_path
@@ -57,7 +57,7 @@ class DirectionalPipelineSupervisor:
         self.metrics_writer = metrics_writer
         self._classic_factory = classic_factory
         self._realtime_factory = realtime_factory
-        self.echo_reference = echo_reference or EchoReferenceBus()
+        self.aec3 = aec3 or WebRtcAec3()
 
     async def run(self) -> None:
         failures = 0
@@ -126,7 +126,7 @@ class DirectionalPipelineSupervisor:
                     control_state=self.control_state,
                     device_manager=self.device_manager,
                     metrics_writer=self.metrics_writer,
-                    echo_reference=self.echo_reference,
+                    aec3=self.aec3,
                 )
             return RemoteToAgentPipeline(
                 config=self.config,
@@ -137,7 +137,7 @@ class DirectionalPipelineSupervisor:
                 control_state=self.control_state,
                 device_manager=self.device_manager,
                 metrics_writer=self.metrics_writer,
-                echo_reference=self.echo_reference,
+                aec3=self.aec3,
             )
 
         if self._realtime_factory is None:
@@ -155,5 +155,5 @@ class DirectionalPipelineSupervisor:
             control_state=self.control_state,
             device_manager=self.device_manager,
             metrics_writer=self.metrics_writer,
-            echo_reference=self.echo_reference,
+            aec3=self.aec3,
         )

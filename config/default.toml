@@ -13,6 +13,11 @@ physical_capture_exclusive_mode = false
 engine = "soxr"
 quality = "HQ"
 
+[audio.aec3]
+enabled = true
+stream_delay_ms = 0
+render_queue_capacity_blocks = 100
+
 [audio.virtual_cables.session_monitor]
 poll_interval_seconds = 1.0
 failure_grace_seconds = 5.0
@@ -188,9 +193,11 @@ engine = "openai_realtime"
 endpoint = "wss://api.openai.com/v1/realtime/translations"
 model = "gpt-realtime-translate"
 sample_rate = 24000
-send_chunk_duration_ms = 20
+send_chunk_duration_ms = 200
 input_queue_capacity_blocks = 25
-playback_queue_capacity_blocks = 10
+send_queue_capacity_frames = 3
+received_queue_capacity_blocks = 25
+playback_queue_capacity_blocks = 4
 reconnect_max_attempts = 5
 reconnect_base_delay_seconds = 0.5
 reconnect_cooldown_seconds = 10.0
@@ -201,6 +208,10 @@ log_transcript_deltas = false
 transcript_ui_update_interval_ms = 150
 transcript_segment_idle_ms = 500
 
+[pipeline.speech_to_speech.defaults.translation.openai_realtime.input_transcription]
+enabled = true
+model = "gpt-realtime-whisper"
+
 [pipeline.speech_to_speech.defaults.translation.openai_realtime.audio_capture]
 enabled = true
 directory = "logs/realtime-audio"
@@ -209,17 +220,6 @@ write_timing_marks = true
 queue_capacity_blocks = 500
 write_buffer_kb = 64
 flush_interval_seconds = 1.0
-
-[pipeline.speech_to_speech.defaults.translation.openai_realtime.audio_capture.echo_guard]
-enabled = false
-reference_activity_dbfs = -48.0
-near_end_override_dbfs = -26.0
-post_reference_override_dbfs = -38.0
-near_end_hold_ms = 800.0
-hangover_ms = 350.0
-correlation_window_ms = 200.0
-reference_delay_max_ms = 500.0
-correlation_threshold = 0.72
 
 [pipeline.speech_to_speech.defaults.translation.openai_realtime.session_gate]
 enabled = true

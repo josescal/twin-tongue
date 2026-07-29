@@ -43,7 +43,7 @@ use placeholders such as `<MIC_ID>` rather than assuming a fixed ID.
 ## Phase 1: physical microphone and headphones only
 
 This test records into memory and plays the result only after recording stops.
-It does not use VB-CABLE, Echo Guard, translation, or the calling application.
+It does not use VB-CABLE, WebRTC AEC3, translation, or the calling application.
 
 ```powershell
 python tools/test_audio_loop.py `
@@ -77,7 +77,7 @@ microphone. Press it once to start and again to stop and listen; recording
 stops automatically after ten seconds if the button is not pressed again. It
 reports RMS and peak for each captured channel, applies the production
 stereo-to-mono downmix, reports the mono level, and plays that exact result
-duplicated across both channels of the selected physical output. Echo Guard
+duplicated across both channels of the selected physical output. WebRTC AEC3
 is not applied by this test. It warns about missing or low signal, clipping,
 channel imbalance, and destructive downmix cancellation.
 
@@ -128,7 +128,7 @@ Pass criteria:
 
 ## Phase 3: CABLE B only
 
-This verifies the outgoing virtual route without Twin Tongue, Echo Guard, or
+This verifies the outgoing virtual route without Twin Tongue, WebRTC AEC3, or
 translation.
 
 1. Open the calling application's microphone test so it actively captures
@@ -204,23 +204,29 @@ Pass criteria:
 - CABLE A and physical playback are absent from this process;
 - no OpenAI session is required.
 
-Running only `agent_to_remote` deliberately provides no far-end Echo Guard
-reference. Uncorrelated microphone audio must therefore pass after the
-correlation look-ahead.
+Running only `agent_to_remote` deliberately provides no far-end AEC3 render
+reference. Microphone audio must still pass without an artificial look-ahead
+delay.
 
-## Phase 5: Echo Guard in isolation
+## Phase 5: WebRTC AEC3 integration
 
-Run the synthetic unit tests:
+Run the adapter and native-binding tests:
 
 ```powershell
-python -m unittest tests.test_echo_guard -v
+python -m pytest tests/test_webrtc_aec3.py -v
 ```
 
 They verify:
 
-- delayed correlated playback is suppressed;
-- uncorrelated near-end speech is preserved;
-- weak uncorrelated speech is not treated as echo.
+- render frames reach WebRTC before the corresponding capture frames;
+- 20 ms application blocks are split into the required 10 ms frames;
+- disabled and native-error paths preserve capture audio bit for bit;
+- call reset discards the previous adaptive state;
+- the installed native WebRTC Audio Processing binding accepts a real frame.
+
+These tests validate the integration contract. Acoustic cancellation quality
+must be validated in phase 8 with the actual microphone, headphones/speaker,
+driver processing, and call timing.
 
 Then compare the physical capture graph in exclusive and shared mode:
 
@@ -298,8 +304,9 @@ one production direction at a time.
 Required evidence:
 
 - `captured`: the English physical-microphone phrase;
-- `accepted`: the same canonical mono phrase (Echo Guard is disabled by default);
+- `accepted`: the microphone phrase after WebRTC AEC3;
 - `sent`: non-empty 24 kHz PCM sent to OpenAI;
+- `received`: translated Spanish PCM returned by OpenAI before local playback;
 - `played`: translated Spanish PCM written to `CABLE-B Input`.
 
 ### 7B. `remote_to_agent`
@@ -315,13 +322,13 @@ Required evidence:
 - `captured`: CABLE A input only;
 - `accepted`: canonical mono remote audio;
 - `sent`: non-empty provider input;
+- `received`: translated PCM returned by OpenAI before local playback;
 - `played`: translated PCM confirmed at the physical output callback.
 
 ## Phase 8: combined echo-reference validation
 
-Run both directions only after phases 1–7 pass. The default configuration keeps
-Echo Guard disabled; enable it explicitly only when validating its reference
-and suppression behavior:
+Run both directions only after phases 1–7 pass. WebRTC AEC3 is enabled in the
+default configuration:
 
 ```powershell
 python .\src\main.py --pipeline both --web
@@ -349,13 +356,13 @@ python tools/analyze_echo_path.py `
 ```
 
 Use the per-call manifests to confirm the exact device names, formats, times,
-track files, queue counters, and Echo Guard statistics.
+track files, queue counters, and AEC3 statistics.
 
 ## Stop rule
 
 Do not compensate for a failing phase by changing a later layer. For example:
 
-- do not tune Echo Guard when phase 1 selected the wrong microphone;
+- do not tune AEC3 delay when phase 1 selected the wrong microphone;
 - do not change translation prompts when phase 3 cannot cross CABLE B;
 - do not diagnose the calling application's STT from `captured`; inspect
   `played` for the audio that actually reached CABLE B;

@@ -210,7 +210,7 @@ Install and validate the two virtual routes before running the complete
 application. See the
 [audio device and routing architecture](docs/audio-routing-architecture.md)
 for the complete calling application → CABLE A → Twin Tongue → CABLE B flow
-and the exact Echo Guard insertion point. Follow
+and the exact WebRTC AEC3 insertion point. Follow
 [VB-CABLE setup and validation](docs/vb-cable-setup.md) for installation,
 no-code routing tests, cleanup, and troubleshooting.
 
@@ -256,7 +256,8 @@ diagnostic audio is recorded automatically for each translated Classic direction
 Writes are buffered and flushed once per second to reduce filesystem and antivirus
 overhead. The control panel also provides manual recording controls when at least
 one active direction is Classic. Realtime diagnostic capture writes distinct
-`captured`, `accepted`, `sent`, and `played` tracks with a per-call manifest.
+`captured`, `accepted`, `sent`, `received`, and `played` tracks with a per-call
+manifest.
 Generated audio, logs, metrics, and preferences are excluded from source control
 and distribution packages.
 

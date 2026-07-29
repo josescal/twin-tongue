@@ -72,6 +72,22 @@ class QueuedAudioOutputTests(unittest.TestCase):
 
     @patch("audio.playback.validate_output_settings")
     @patch("audio.playback.resolve_device", return_value=7)
+    def test_callback_reports_rendered_silence_for_aec_timeline(
+        self,
+        resolve_device: object,
+        validate_output: object,
+    ) -> None:
+        observer = Mock()
+        output = QueuedAudioOutput(
+            7, 48_000, 1, "int16", 2, played_observer=observer
+        )
+
+        output._output_callback(bytearray(4), 2, None, None)
+
+        observer.assert_called_once_with(bytes(4))
+
+    @patch("audio.playback.validate_output_settings")
+    @patch("audio.playback.resolve_device", return_value=7)
     @patch("audio.playback.device_name", return_value="Output")
     @patch("audio.playback.sd.RawOutputStream", side_effect=FakeRawOutputStream)
     def test_start_preloads_blocks_before_starting_stream(

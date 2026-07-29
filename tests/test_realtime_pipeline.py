@@ -65,6 +65,26 @@ class RealtimePipelineTests(unittest.TestCase):
         asyncio.run(pipeline.control_state.set_manual_audio_recording(True))
         self.assertTrue(pipeline._should_record_audio())
 
+    def test_recording_requires_an_active_call_cable_when_devices_are_managed(
+        self,
+    ) -> None:
+        pipeline = _pipeline()
+        pipeline._audio_recording_enabled = True
+        pipeline.control_state = ApplicationState(
+            audio_recording_enabled=True,
+            initial_modes={"remote_to_agent": "translate"},
+        )
+        pipeline.device_manager = Mock()
+        pipeline.device_manager.application_session_active.return_value = False
+
+        self.assertFalse(pipeline._should_record_audio())
+
+        pipeline.device_manager.application_session_active.return_value = True
+        self.assertTrue(pipeline._should_record_audio())
+        pipeline.device_manager.application_session_active.assert_called_with(
+            "remote_input"
+        )
+
     def test_transcribed_text_is_logged_only_at_debug(self) -> None:
         pipeline = _pipeline()
         pipeline.control_state = ApplicationState(

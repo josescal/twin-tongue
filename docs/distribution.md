@@ -56,7 +56,8 @@ Twin Tongue sends audio and text to external providers for transcription, transl
 The shipped configuration uses OpenAI Realtime in both directions but starts in
 passthrough. Enabling translation does not open an API session until a call
 application is detected on the relevant cable. The diagnostic configuration
-controls whether Realtime writes `captured`, `accepted`, `sent`, and `played`
+controls whether Realtime writes `captured`, `accepted`, `sent`, `received`, and
+`played`
 audio plus per-call manifests below its configured local directory. Classic
 diagnostic recording follows its own configuration. Diagnostic artifacts are
 excluded from packages; review privacy and retention requirements before

@@ -2,7 +2,7 @@
 
 Twin Tongue includes focused command-line tools for validating one layer of the audio and provider stack at a time. Run them from the repository root with the virtual environment activated:
 
-For a complete device → cable → passthrough → Echo Guard → translation
+For a complete device → cable → passthrough → WebRTC AEC3 → translation
 sequence, follow the
 [isolated audio pipeline test runbook](isolated-pipeline-tests.md).
 
@@ -133,7 +133,7 @@ Without a connected call application the panel should show that translation is
 waiting for a call and no OpenAI session should be created. Realtime uses
 bounded capture/send/playback queues. When
 `pipeline.speech_to_speech.openai_realtime.audio_capture.enabled` is true, it
-writes `captured`, `accepted`, `sent`, and `played` WAV/JSONL tracks plus a
+writes `captured`, `accepted`, `sent`, `received`, and `played` WAV/JSONL tracks plus a
 per-call manifest below the configured directory. Inspect
 `logs/twin-tongue.log` for structured connection and queue events. Enable
 `[observability.metrics]` only when CSV measurements are needed.

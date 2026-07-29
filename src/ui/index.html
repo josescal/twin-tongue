@@ -111,7 +111,8 @@
     .transcript-entry.translation-only { grid-template-columns: 1fr; }
     .transcript-entry.remote-turn { justify-self: end; border-right: 4px solid #3b82f6; }
     .transcript-entry.agent-turn { justify-self: start; border-left: 4px solid #25a765; }
-    .transcript-speaker { grid-column: 1 / -1; padding: 8px 14px; border-bottom: 1px solid #e3e6eb; color: #344054; font-size: .75rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+    .transcript-speaker { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px; border-bottom: 1px solid #e3e6eb; color: #344054; font-size: .75rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+    .transcript-timestamp { flex: 0 0 auto; font-variant-numeric: tabular-nums; opacity: .72; }
     .remote-turn .transcript-speaker { background: #eff6ff; color: #1d4ed8; }
     .agent-turn .transcript-speaker { background: #eefbf3; color: #12673d; }
     .source-block, .translated-block { min-width: 0; padding: 13px 14px; }
@@ -335,7 +336,7 @@
         eyebrow: "Control panel", connecting: "Connecting...", connected: "Connected", reconnecting: "Disconnected",
         tabControl: "Control", tabTranscription: "Transcription", tabHelp: "Help",
         remoteLanguage: "Other person's language", agentLanguage: "Your language", settingsTitle: "Configuration", translationEngine: "Translation engine", classicEngine: "Classic (STT + translation + TTS)", openaiRealtimeEngine: "OpenAI Realtime Translate", remoteVoiceLegend: "Translated voice you hear", agentVoiceLegend: "Translated voice the other person hears", male: "Male", female: "Female",
-        speakerLabel: "Your speakers or headphones are:", micLabel: "Your microphone is:", audioPathTestTitle: "Physical audio path", audioPathTestHelp: "Outside a call, start the test and speak when recording begins. Click again to stop and listen. Recording stops automatically after 10 seconds.", testAudioPath: "Test audio", stopAudioTest: "Stop and listen", audioTestStartsIn: "Recording starts in", recordingAudio: "Recording — speak now", playingAudio: "Recording complete — playing the pipeline mono audio...", audioTestPassed: "Signal and conversion validated. Confirm that you heard the playback clearly.", audioTestNoSignal: "No usable microphone signal was detected.", audioTestLowSignal: "The microphone signal is too low.", audioTestCancellation: "The stereo channels cancel each other during the pipeline downmix.", audioTestClipping: "The microphone signal is clipping.", audioTestImbalance: "The two microphone channels have a large level difference.", audioTestFailed: "Audio test failed.", capturedLevel: "Captured", downmixedLevel: "Downmixed mono", monitorPlayback: "headphone playback", echoGuardDisabled: "Echo Guard disabled",
+        speakerLabel: "Your speakers or headphones are:", micLabel: "Your microphone is:", audioPathTestTitle: "Physical audio path", audioPathTestHelp: "Outside a call, start the test and speak when recording begins. Click again to stop and listen. Recording stops automatically after 10 seconds.", testAudioPath: "Test audio", stopAudioTest: "Stop and listen", audioTestStartsIn: "Recording starts in", recordingAudio: "Recording — speak now", playingAudio: "Recording complete — playing the pipeline mono audio...", audioTestPassed: "Signal and conversion validated. Confirm that you heard the playback clearly.", audioTestNoSignal: "No usable microphone signal was detected.", audioTestLowSignal: "The microphone signal is too low.", audioTestCancellation: "The stereo channels cancel each other during the pipeline downmix.", audioTestClipping: "The microphone signal is clipping.", audioTestImbalance: "The two microphone channels have a large level difference.", audioTestFailed: "Audio test failed.", capturedLevel: "Captured", downmixedLevel: "Downmixed mono", monitorPlayback: "headphone playback", aec3Disabled: "WebRTC AEC3 disabled",
         remotePipelineTitle: "Audio you hear", agentPipelineTitle: "Audio the other person hears", loadingOriginal: "Loading system... Original audio is active.",
         translated: "Translated", untranslated: "Untranslated", bothDirectionsTitle: "Two-way translation", bothDirectionsHelp: "Apply the same mode to both sides of the conversation.", enableBothDirections: "Translate both ways", disableBothDirections: "Use original audio both ways",
         callConnections: "Call connections", callSpeaker: "Call speaker", callMic: "Call microphone",
@@ -359,7 +360,7 @@
         eyebrow: "Panel de control", connecting: "Conectando...", connected: "Conectado", reconnecting: "Sin conexión",
         tabControl: "Control", tabTranscription: "Transcripción", tabHelp: "Ayuda",
         remoteLanguage: "Idioma de la otra persona", agentLanguage: "Tu idioma", settingsTitle: "Configuración", translationEngine: "Motor de traducción", classicEngine: "Clásico (STT + traducción + TTS)", openaiRealtimeEngine: "OpenAI Realtime Translate", remoteVoiceLegend: "Voz traducida que escuchas", agentVoiceLegend: "Voz traducida que escucha la otra persona", male: "Hombre", female: "Mujer",
-        speakerLabel: "Tus altavoces o auriculares son:", micLabel: "Tu micrófono es:", audioPathTestTitle: "Ruta de audio física", audioPathTestHelp: "Fuera de una llamada, inicia la prueba y habla cuando comience la grabación. Pulsa de nuevo para parar y escuchar. La grabación se detiene automáticamente a los 10 segundos.", testAudioPath: "Probar audio", stopAudioTest: "Parar y escuchar", audioTestStartsIn: "La grabación empieza en", recordingAudio: "Grabando — habla ahora", playingAudio: "Grabación terminada — reproduciendo el audio mono del pipeline...", audioTestPassed: "Señal y conversión validadas. Confirma que has oído la reproducción con claridad.", audioTestNoSignal: "No se ha detectado una señal de micrófono utilizable.", audioTestLowSignal: "La señal del micrófono es demasiado baja.", audioTestCancellation: "Los canales estéreo se cancelan al aplicar el downmix del pipeline.", audioTestClipping: "La señal del micrófono está saturando.", audioTestImbalance: "Los dos canales del micrófono tienen una diferencia de nivel elevada.", audioTestFailed: "La prueba de audio ha fallado.", capturedLevel: "Capturado", downmixedLevel: "Mono tras downmix", monitorPlayback: "reproducción en auriculares", echoGuardDisabled: "Echo Guard desactivado",
+        speakerLabel: "Tus altavoces o auriculares son:", micLabel: "Tu micrófono es:", audioPathTestTitle: "Ruta de audio física", audioPathTestHelp: "Fuera de una llamada, inicia la prueba y habla cuando comience la grabación. Pulsa de nuevo para parar y escuchar. La grabación se detiene automáticamente a los 10 segundos.", testAudioPath: "Probar audio", stopAudioTest: "Parar y escuchar", audioTestStartsIn: "La grabación empieza en", recordingAudio: "Grabando — habla ahora", playingAudio: "Grabación terminada — reproduciendo el audio mono del pipeline...", audioTestPassed: "Señal y conversión validadas. Confirma que has oído la reproducción con claridad.", audioTestNoSignal: "No se ha detectado una señal de micrófono utilizable.", audioTestLowSignal: "La señal del micrófono es demasiado baja.", audioTestCancellation: "Los canales estéreo se cancelan al aplicar el downmix del pipeline.", audioTestClipping: "La señal del micrófono está saturando.", audioTestImbalance: "Los dos canales del micrófono tienen una diferencia de nivel elevada.", audioTestFailed: "La prueba de audio ha fallado.", capturedLevel: "Capturado", downmixedLevel: "Mono tras downmix", monitorPlayback: "reproducción en auriculares", aec3Disabled: "WebRTC AEC3 desactivado",
         remotePipelineTitle: "Audio que escuchas tú", agentPipelineTitle: "Audio que escucha la otra persona", loadingOriginal: "Cargando el sistema... El audio original está activo.",
         translated: "Traducido", untranslated: "Sin traducir", bothDirectionsTitle: "Traducción en ambos sentidos", bothDirectionsHelp: "Aplica el mismo modo a los dos sentidos de la conversación.", enableBothDirections: "Traducir en ambos sentidos", disableBothDirections: "Usar audio original en ambos sentidos",
         callConnections: "Conexiones de la llamada", callSpeaker: "Altavoz de la llamada", callMic: "Micrófono de la llamada",
@@ -442,6 +443,15 @@
     }
 
     function render(state) {
+      const incomingRevision = Number(state?.revision);
+      const currentRevision = Number(currentState?.revision);
+      if (
+        Number.isFinite(incomingRevision)
+        && Number.isFinite(currentRevision)
+        && incomingRevision < currentRevision
+      ) {
+        return;
+      }
       currentState = state;
       uiLanguage = state.ui_language || "en";
       applyTranslations();
@@ -653,7 +663,13 @@
         article.classList.toggle("translation-only", !hasSourceText);
         const speaker = document.createElement("div");
         speaker.className = "transcript-speaker";
-        speaker.textContent = remoteTurn ? t("remoteSpeaker") : t("agentSpeaker");
+        const speakerLabel = document.createElement("span");
+        speakerLabel.textContent = remoteTurn ? t("remoteSpeaker") : t("agentSpeaker");
+        const timestamp = document.createElement("time");
+        timestamp.className = "transcript-timestamp";
+        timestamp.dateTime = paragraph.timestamp;
+        timestamp.textContent = paragraph.timestamp;
+        speaker.append(speakerLabel, timestamp);
         const source = document.createElement("div");
         source.className = "source-block";
         const sourceLabel = document.createElement("div");
@@ -717,6 +733,7 @@
             sourceParts: [],
             translatedParts: [],
             translation_status: "complete",
+            timestamp: entry.timestamp || "",
             count: 0
           };
           paragraphs.push(current);
@@ -741,6 +758,7 @@
         source_text: paragraph.sourceParts.join("\n"),
         translated_text: paragraph.translatedParts.join("\n"),
         translation_status: paragraph.translation_status,
+        timestamp: paragraph.timestamp,
         count: paragraph.count
       })).filter(paragraph => paragraph.source_text.trim() || paragraph.translated_text.trim());
     }
@@ -968,7 +986,7 @@
         const mono = payload.downmixed_level || {};
         const format =
           `${payload.sample_rate} Hz · ${payload.captured_channels}→${payload.pipeline_channels} ch · ` +
-          `${t("monitorPlayback")} ${payload.playback_channels} ch · ${t("echoGuardDisabled")}`;
+          `${t("monitorPlayback")} ${payload.playback_channels} ch · ${t("aec3Disabled")}`;
         result.textContent =
           `${assessmentMessages[payload.assessment] || t("audioTestFailed")} ` +
           `${t("capturedLevel")}: ${channelLevels}. ` +

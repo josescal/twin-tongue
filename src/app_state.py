@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime
 from enum import StrEnum
 from typing import AsyncIterator, Literal, TypeAlias, cast
 
@@ -25,7 +26,7 @@ SUPPORTED_LANGUAGES = {
     "ca": "Catalan",
 }
 SUPPORTED_UI_LANGUAGES: tuple[UiLanguage, ...] = ("en", "es")
-TRANSCRIPTION_HISTORY_LIMIT = 50
+TRANSCRIPTION_HISTORY_LIMIT_PER_PIPELINE = 50
 
 
 class PipelineMode(StrEnum):
@@ -140,6 +141,10 @@ class ApplicationState:
     def get_engine(self, name: str) -> TranslationEngine:
         """Return the selected translation engine for a pipeline."""
         return self._engines[self._parse_pipeline_name(name)]
+
+    def get_pipeline_status(self, name: str) -> PipelineStatus:
+        """Return the latest operational status published by a pipeline."""
+        return self._statuses[self._parse_pipeline_name(name)]
 
     def snapshot(self) -> dict[str, object]:
         """Return a JSON-serializable view of the current state."""
@@ -327,9 +332,10 @@ class ApplicationState:
                 "translation_status": "pending",
                 "source_language": source_language,
                 "target_language": target_language,
+                "timestamp": _transcript_timestamp(),
             }
         )
-        del self._transcripts[:-TRANSCRIPTION_HISTORY_LIMIT]
+        self._trim_transcription_history(parsed_pipeline_name)
         self._publish_change()
 
     def publish_transcript_translation(
@@ -370,7 +376,27 @@ class ApplicationState:
             if final
             else "pending"
         )
-        updated: dict[str, object] = {
+        for index, entry in enumerate(self._transcripts):
+            if (
+                entry["pipeline"] == parsed_pipeline_name
+                and entry["id"] == transcript_id
+            ):
+                updated: dict[str, object] = {
+                    "id": transcript_id,
+                    "pipeline": parsed_pipeline_name,
+                    "source_text": normalized_source,
+                    "translated_text": normalized_translation or None,
+                    "translation_status": translation_status,
+                    "source_language": source_language,
+                    "target_language": target_language,
+                    "timestamp": entry["timestamp"],
+                }
+                if entry == updated:
+                    return
+                self._transcripts[index] = updated
+                self._publish_change()
+                return
+        updated = {
             "id": transcript_id,
             "pipeline": parsed_pipeline_name,
             "source_text": normalized_source,
@@ -378,19 +404,10 @@ class ApplicationState:
             "translation_status": translation_status,
             "source_language": source_language,
             "target_language": target_language,
+            "timestamp": _transcript_timestamp(),
         }
-        for index, entry in enumerate(self._transcripts):
-            if (
-                entry["pipeline"] == parsed_pipeline_name
-                and entry["id"] == transcript_id
-            ):
-                if entry == updated:
-                    return
-                self._transcripts[index] = updated
-                self._publish_change()
-                return
         self._transcripts.append(updated)
-        del self._transcripts[:-TRANSCRIPTION_HISTORY_LIMIT]
+        self._trim_transcription_history(parsed_pipeline_name)
         self._publish_change()
 
     def mark_transcript_translation_unavailable(
@@ -417,6 +434,23 @@ class ApplicationState:
                 return self.snapshot()
             self._transcripts.clear()
             return self._publish_change()
+
+    def _trim_transcription_history(self, pipeline_name: PipelineName) -> None:
+        """Retain the newest transcript entries independently for one direction."""
+        matching_indices = [
+            index
+            for index, entry in enumerate(self._transcripts)
+            if entry["pipeline"] == pipeline_name
+        ]
+        excess = len(matching_indices) - TRANSCRIPTION_HISTORY_LIMIT_PER_PIPELINE
+        if excess <= 0:
+            return
+        discarded_indices = set(matching_indices[:excess])
+        self._transcripts = [
+            entry
+            for index, entry in enumerate(self._transcripts)
+            if index not in discarded_indices
+        ]
 
     async def set_mode(self, name: str, mode: str | PipelineMode) -> dict[str, object]:
         """Change a pipeline mode and notify realtime subscribers."""
@@ -552,3 +586,8 @@ class ApplicationState:
         if language not in SUPPORTED_UI_LANGUAGES:
             raise ValueError("Unsupported UI language; expected one of: en, es")
         return cast(UiLanguage, language)
+
+
+def _transcript_timestamp() -> str:
+    """Return the local wall-clock time used to correlate UI cards and WAV files."""
+    return datetime.now().astimezone().strftime("%H:%M:%S")

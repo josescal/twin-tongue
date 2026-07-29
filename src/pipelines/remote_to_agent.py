@@ -11,7 +11,7 @@ import sounddevice as sd
 
 from audio.capture import QueuedAudioInput
 from audio.device_manager import AudioDeviceManager
-from audio.echo_guard import EchoReferenceBus, ReferenceEchoGuard
+from audio.webrtc_aec3 import WebRtcAec3
 from audio.portaudio import (
     AudioDeviceError,
     format_device,
@@ -115,7 +115,7 @@ class RemoteToAgentPipeline:
         control_state: ApplicationState | None = None,
         device_manager: AudioDeviceManager | None = None,
         metrics_writer: CsvMetricsWriter | None = None,
-        echo_reference: EchoReferenceBus | None = None,
+        aec3: WebRtcAec3 | None = None,
     ) -> None:
         self.config = config
         self.provider_factory = provider_factory
@@ -128,11 +128,7 @@ class RemoteToAgentPipeline:
         self.control_state = control_state
         self.device_manager = device_manager
         self.metrics_writer = metrics_writer
-        self.echo_reference = echo_reference or EchoReferenceBus()
-        self._echo_guard = ReferenceEchoGuard(
-            self.echo_reference,
-            enabled=pipeline_name == "agent_to_remote",
-        )
+        self.aec3 = aec3 or WebRtcAec3()
         self.statistics = PipelineStatistics()
         self.transcript_queue: asyncio.Queue[TimedTranscript] = asyncio.Queue(
             maxsize=self.TRANSCRIPT_QUEUE_CAPACITY
@@ -692,8 +688,10 @@ class RemoteToAgentPipeline:
                 output_sample_rate, capture.frame_duration_ms
             ),
             played_observer=(
-                lambda block: self.echo_reference.observe(
-                    convert_int16_channels(block, output_channels, 1)
+                lambda block: self.aec3.observe_render(
+                    block,
+                    sample_rate=output_sample_rate,
+                    channels=output_channels,
                 )
                 if self.pipeline_name == "remote_to_agent"
                 else None
@@ -708,6 +706,7 @@ class RemoteToAgentPipeline:
         output_switch_error: str | None = None
         next_keepalive_at = time.monotonic() + stt_keepalive_seconds
         recording_observed = False
+        aec_call_observed: bool | None = None
         logger.info(
             "event=pipeline_mode_observed requested_mode=%s effective_mode=%s",
             requested_mode.value,
@@ -759,7 +758,19 @@ class RemoteToAgentPipeline:
                     continue
                 mono = convert_int16_channels(block, capture.channels, 1)
                 if self.pipeline_name == "agent_to_remote":
-                    mono = self._echo_guard.process(mono)
+                    call_active = self._call_session_active()
+                    if call_active != aec_call_observed:
+                        aec_call_observed = call_active
+                        self.aec3.reset()
+                        logger.info(
+                            "event=webrtc_aec3_call_state_changed active=%s",
+                            call_active,
+                        )
+                    if call_active:
+                        mono = self.aec3.process_capture(
+                            mono,
+                            sample_rate=capture.sample_rate,
+                        )
                 recording_active = self._should_record_audio()
                 if recording_active is not recording_observed:
                     recording_observed = recording_active
@@ -1377,9 +1388,21 @@ class RemoteToAgentPipeline:
     def _should_record_audio(self) -> bool:
         if not self._audio_recording_enabled:
             return False
+        if not self._call_session_active():
+            return False
         if self.control_state is None:
             return self._current_mode() is PipelineMode.TRANSLATE
         return self.control_state.is_audio_recording_active_for(self.pipeline_name)
+
+    def _call_session_active(self) -> bool:
+        if self.device_manager is None:
+            return True
+        route = (
+            "translated_output"
+            if self.pipeline_name == "agent_to_remote"
+            else "remote_input"
+        )
+        return self.device_manager.application_session_active(route) is True
 
     def _current_output_device(self, fallback: int) -> int:
         if self.device_manager is not None and self.pipeline_name == "remote_to_agent":

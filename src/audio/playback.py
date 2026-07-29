@@ -186,18 +186,20 @@ class QueuedAudioOutput:
                 self._discontinuity_pending = False
             self._remember_last_frame(outdata)
             self.played_blocks += 1
-            if self.played_observer is not None:
-                try:
-                    self.played_observer(bytes(outdata))  # type: ignore[arg-type]
-                except Exception:
-                    logger.exception(
-                        "event=audio_played_observer_failed action=observer_ignored"
-                    )
-            return
-        outdata[:] = self._silence  # type: ignore[index]
-        self._fade_out(outdata)
-        self._recovering_from_empty_buffer = True
-        self.empty_buffer_events += 1
+        else:
+            outdata[:] = self._silence  # type: ignore[index]
+            self._fade_out(outdata)
+            self._recovering_from_empty_buffer = True
+            self.empty_buffer_events += 1
+        if self.played_observer is not None:
+            try:
+                # AEC3 requires the complete render timeline, including
+                # callbacks that physically emitted silence.
+                self.played_observer(bytes(outdata))  # type: ignore[arg-type]
+            except Exception:
+                logger.exception(
+                    "event=audio_played_observer_failed action=observer_ignored"
+                )
 
     def _fade_out(self, outdata: object) -> None:
         """Reach digital silence smoothly after the queued audio runs dry."""
