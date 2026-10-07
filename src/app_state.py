@@ -2,14 +2,16 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime
 from enum import StrEnum
-import time
+import logging
 from typing import AsyncIterator, Literal, TypeAlias, cast
 
 from audio.device_manager import AudioDeviceManager
 from twin_tongue_version import __version__
 
 
+LOGGER = logging.getLogger(__name__)
 PipelineName: TypeAlias = Literal["remote_to_agent", "agent_to_remote"]
 LanguageRole: TypeAlias = Literal["agent", "remote"]
 UiLanguage: TypeAlias = Literal["en", "es"]
@@ -25,8 +27,33 @@ SUPPORTED_LANGUAGES = {
     "fr": "French",
     "ca": "Catalan",
 }
+OPENAI_REALTIME_OUTPUT_LANGUAGE_CODES = frozenset(
+    {
+        "de",
+        "en",
+        "es",
+        "fr",
+        "hi",
+        "id",
+        "it",
+        "ja",
+        "ko",
+        "pt",
+        "ru",
+        "vi",
+        "zh",
+    }
+)
+TARGET_PIPELINE_BY_LANGUAGE_ROLE: dict[LanguageRole, PipelineName] = {
+    "agent": "remote_to_agent",
+    "remote": "agent_to_remote",
+}
+DEFAULT_LANGUAGE_BY_ROLE: dict[LanguageRole, str] = {
+    "agent": "es",
+    "remote": "en",
+}
 SUPPORTED_UI_LANGUAGES: tuple[UiLanguage, ...] = ("en", "es")
-TRANSCRIPTION_HISTORY_LIMIT = 50
+TRANSCRIPTION_HISTORY_LIMIT_PER_PIPELINE = 50
 
 
 class PipelineMode(StrEnum):
@@ -34,6 +61,13 @@ class PipelineMode(StrEnum):
 
     TRANSLATE = "translate"
     PASSTHROUGH = "passthrough"
+
+
+class TranslationEngine(StrEnum):
+    """Selectable translation implementations for one audio direction."""
+
+    CLASSIC = "classic"
+    OPENAI_REALTIME = "openai_realtime"
 
 
 class VoiceGender(StrEnum):
@@ -50,8 +84,11 @@ class PipelineStatus(StrEnum):
     SYSTEM_LOADING = "system_loading"
     SWITCHING = "switching"
     INITIALIZING = "initializing"
+    RECONNECTING = "reconnecting"
+    WAITING_FOR_CALL = "waiting_for_call"
     TRANSLATION_UNAVAILABLE = "translation_unavailable"
     TRANSLATION_READY = "translation_ready"
+    TRANSLATION_DELAYED = "translation_delayed"
     PASSTHROUGH = "passthrough"
     ERROR = "error"
 
@@ -62,13 +99,12 @@ class ApplicationState:
     def __init__(
         self,
         initial_modes: dict[str, str] | None = None,
+        initial_engines: dict[str, str] | None = None,
         initial_languages: dict[str, str] | None = None,
         initial_voice_genders: dict[str, str] | None = None,
         initial_ui_language: str = "en",
         audio_recording_enabled: bool = False,
         active_pipelines: tuple[str, ...] = PIPELINE_NAMES,
-        barge_in_enabled: bool = True,
-        barge_in_resume_delay_ms: float = 300,
     ) -> None:
         requested_modes = initial_modes or {}
         self._modes: dict[PipelineName, PipelineMode] = {
@@ -84,28 +120,39 @@ class ApplicationState:
         self._active_pipelines = frozenset(
             cast(PipelineName, name) for name in active_pipelines
         )
+        requested_voice_genders = initial_voice_genders or {}
+        self._voice_genders: dict[PipelineName, VoiceGender] = {
+            name: VoiceGender(requested_voice_genders.get(name, VoiceGender.MALE))
+            for name in PIPELINE_NAMES
+        }
+        requested_engines = initial_engines or {}
+        self._engines: dict[PipelineName, TranslationEngine] = {
+            name: TranslationEngine(
+                requested_engines.get(name, TranslationEngine.CLASSIC)
+            )
+            for name in PIPELINE_NAMES
+        }
         requested_languages = initial_languages or {"agent": "es", "remote": "en"}
         self._languages: dict[LanguageRole, str] = {}
         for role in LANGUAGE_ROLES:
             language = requested_languages.get(role)
             if language not in SUPPORTED_LANGUAGES:
                 raise ValueError(f"Unsupported language '{language}' for {role}")
+            if not self._target_language_supported(role, language):
+                fallback = DEFAULT_LANGUAGE_BY_ROLE[role]
+                LOGGER.warning(
+                    "event=unsupported_initial_target_language "
+                    "role=%s language=%s engine=openai_realtime "
+                    "fallback=%s",
+                    role,
+                    language,
+                    fallback,
+                )
+                language = fallback
             self._languages[role] = language
-        requested_voice_genders = initial_voice_genders or {}
-        self._voice_genders: dict[PipelineName, VoiceGender] = {
-            name: VoiceGender(requested_voice_genders.get(name, VoiceGender.MALE))
-            for name in PIPELINE_NAMES
-        }
         self._ui_language = self._parse_ui_language(initial_ui_language)
         self._audio_recording_enabled = bool(audio_recording_enabled)
         self._manual_audio_recording = False
-        if barge_in_resume_delay_ms < 0:
-            raise ValueError("Barge-in resume delay must not be negative.")
-        self._barge_in_enabled = bool(barge_in_enabled)
-        self._barge_in_resume_delay_seconds = barge_in_resume_delay_ms / 1000
-        self._translated_playback_until: dict[PipelineName, float] = {
-            name: 0.0 for name in PIPELINE_NAMES
-        }
         self._transcripts: list[dict[str, object]] = []
         self._revision = 0
         self._lock = asyncio.Lock()
@@ -122,13 +169,28 @@ class ApplicationState:
         self._ui_language = self._parse_ui_language(manager.ui_language)
         for role, language in manager.participant_languages.items():
             if role in LANGUAGE_ROLES and language in SUPPORTED_LANGUAGES:
-                self._languages[cast(LanguageRole, role)] = language
+                parsed_role = cast(LanguageRole, role)
+                if self._target_language_supported(parsed_role, language):
+                    self._languages[parsed_role] = language
+                else:
+                    manager.set_participant_language(
+                        parsed_role,
+                        self._languages[parsed_role],
+                    )
         manager.set_change_callback(self._publish_external_change)
 
     def get_mode(self, name: str) -> PipelineMode:
         """Return the current mode for a pipeline."""
         parsed_name = self._parse_pipeline_name(name)
         return self._modes[parsed_name]
+
+    def get_engine(self, name: str) -> TranslationEngine:
+        """Return the selected translation engine for a pipeline."""
+        return self._engines[self._parse_pipeline_name(name)]
+
+    def get_pipeline_status(self, name: str) -> PipelineStatus:
+        """Return the latest operational status published by a pipeline."""
+        return self._statuses[self._parse_pipeline_name(name)]
 
     def snapshot(self) -> dict[str, object]:
         """Return a JSON-serializable view of the current state."""
@@ -142,16 +204,19 @@ class ApplicationState:
                 {"code": code, "label": label}
                 for code, label in SUPPORTED_LANGUAGES.items()
             ],
+            "supported_languages_by_role": {
+                role: [
+                    {"code": code, "label": label}
+                    for code, label in SUPPORTED_LANGUAGES.items()
+                    if self._target_language_supported(role, code)
+                ]
+                for role in LANGUAGE_ROLES
+            },
             "audio_recording": {
                 "enabled": self._audio_recording_enabled,
                 "active": self.is_audio_recording_active(),
                 "manual": self._manual_audio_recording,
                 "automatic_pipelines": list(self._automatic_recording_pipelines()),
-            },
-            "barge_in": {
-                "enabled": self._barge_in_enabled,
-                "pipeline": "agent_to_remote",
-                "resume_delay_ms": self._barge_in_resume_delay_seconds * 1000,
             },
             "transcription": {
                 "entries": [dict(entry) for entry in self._transcripts],
@@ -159,9 +224,30 @@ class ApplicationState:
             "pipelines": {
                 name: {
                     "mode": self._modes[name].value,
+                    "effective_mode": (
+                        PipelineMode.TRANSLATE.value
+                        if self._modes[name] is PipelineMode.TRANSLATE
+                        and self._statuses[name]
+                        in {
+                            PipelineStatus.TRANSLATION_READY,
+                            PipelineStatus.TRANSLATION_DELAYED,
+                        }
+                        else PipelineMode.PASSTHROUGH.value
+                    ),
+                    "engine": self._engines[name].value,
                     "voice_gender": self._voice_genders[name].value,
                     "running": name in self._active_pipelines,
-                    "status": self._statuses[name].value,
+                    # Older control pages only recognize passthrough as a ready
+                    # original-audio state. Keep that wire value compatible while
+                    # exposing the more precise call-waiting condition separately.
+                    "status": (
+                        PipelineStatus.PASSTHROUGH.value
+                        if self._statuses[name] is PipelineStatus.WAITING_FOR_CALL
+                        else self._statuses[name].value
+                    ),
+                    "waiting_for_call": (
+                        self._statuses[name] is PipelineStatus.WAITING_FOR_CALL
+                    ),
                 }
                 for name in PIPELINE_NAMES
             },
@@ -188,6 +274,7 @@ class ApplicationState:
             raise ValueError(
                 f"Unsupported language '{language}'; expected one of: {choices}"
             )
+        self._validate_target_language(parsed_role, language)
         async with self._lock:
             if self._languages[parsed_role] == language:
                 return self.snapshot()
@@ -259,9 +346,13 @@ class ApplicationState:
     def is_audio_recording_active_for(self, name: str) -> bool:
         """Return whether one pipeline should write diagnostic audio."""
         parsed_name = self._parse_pipeline_name(name)
-        return self._audio_recording_enabled and parsed_name in self._active_pipelines and (
-            self._manual_audio_recording
-            or self._modes[parsed_name] is PipelineMode.TRANSLATE
+        return (
+            self._audio_recording_enabled
+            and parsed_name in self._active_pipelines
+            and (
+                self._manual_audio_recording
+                or self._automatic_recording_active_for(parsed_name)
+            )
         )
 
     async def set_manual_audio_recording(self, active: bool) -> dict[str, object]:
@@ -273,37 +364,6 @@ class ApplicationState:
                 return self.snapshot()
             self._manual_audio_recording = active
             return self._publish_change()
-
-    def note_translated_playback(
-        self,
-        name: str,
-        buffered_audio_ms: float,
-        *,
-        now: float | None = None,
-    ) -> None:
-        """Extend the interval that blocks barge-in from the opposite microphone."""
-        parsed_name = self._parse_pipeline_name(name)
-        if self._barge_in_enabled:
-            return
-        if buffered_audio_ms < 0:
-            raise ValueError("Buffered translated playback must not be negative.")
-        current_time = time.monotonic() if now is None else now
-        blocked_until = current_time + (
-            buffered_audio_ms / 1000 + self._barge_in_resume_delay_seconds
-        )
-        self._translated_playback_until[parsed_name] = max(
-            self._translated_playback_until[parsed_name], blocked_until
-        )
-
-    def is_capture_suppressed_by_barge_in(
-        self, name: str, *, now: float | None = None
-    ) -> bool:
-        """Return whether opposite translated playback currently owns the turn."""
-        parsed_name = self._parse_pipeline_name(name)
-        if self._barge_in_enabled or parsed_name != "agent_to_remote":
-            return False
-        current_time = time.monotonic() if now is None else now
-        return current_time < self._translated_playback_until["remote_to_agent"]
 
     def publish_transcript_final(
         self,
@@ -322,11 +382,13 @@ class ApplicationState:
                 "source_text": text,
                 "translated_text": None,
                 "translation_status": "pending",
+                "pair_status": "waiting_for_translation",
                 "source_language": source_language,
                 "target_language": target_language,
+                "timestamp": _transcript_timestamp(),
             }
         )
-        del self._transcripts[:-TRANSCRIPTION_HISTORY_LIMIT]
+        self._trim_transcription_history(parsed_pipeline_name)
         self._publish_change()
 
     def publish_transcript_translation(
@@ -339,9 +401,75 @@ class ApplicationState:
                 updated = dict(entry)
                 updated["translated_text"] = text
                 updated["translation_status"] = "complete"
+                updated["pair_status"] = "aligned"
                 self._transcripts[index] = updated
                 self._publish_change()
                 return
+
+    def publish_realtime_transcript(
+        self,
+        pipeline_name: str,
+        transcript_id: int,
+        source_text: str,
+        translated_text: str,
+        source_language: str,
+        target_language: str,
+        *,
+        final: bool = False,
+    ) -> None:
+        """Create or update one in-memory streaming translation transcript."""
+        parsed_pipeline_name = self._parse_pipeline_name(pipeline_name)
+        normalized_source = source_text.strip()
+        normalized_translation = translated_text.strip()
+        if not normalized_source and not normalized_translation:
+            return
+        translation_status = (
+            "complete"
+            if final and normalized_translation
+            else "unavailable"
+            if final
+            else "pending"
+        )
+        pair_status = _transcript_pair_status(
+            normalized_source,
+            normalized_translation,
+            final=final,
+        )
+        for index, entry in enumerate(self._transcripts):
+            if (
+                entry["pipeline"] == parsed_pipeline_name
+                and entry["id"] == transcript_id
+            ):
+                updated: dict[str, object] = {
+                    "id": transcript_id,
+                    "pipeline": parsed_pipeline_name,
+                    "source_text": normalized_source,
+                    "translated_text": normalized_translation or None,
+                    "translation_status": translation_status,
+                    "pair_status": pair_status,
+                    "source_language": source_language,
+                    "target_language": target_language,
+                    "timestamp": entry["timestamp"],
+                }
+                if entry == updated:
+                    return
+                self._transcripts[index] = updated
+                self._publish_change()
+                return
+        updated = {
+            "id": transcript_id,
+            "pipeline": parsed_pipeline_name,
+            "source_text": normalized_source,
+            "translated_text": normalized_translation or None,
+            "translation_status": translation_status,
+            "pair_status": pair_status,
+            "source_language": source_language,
+            "target_language": target_language,
+            "timestamp": _transcript_timestamp(),
+        }
+        self._transcripts.append(updated)
+        self._trim_transcription_history(parsed_pipeline_name)
+        self._publish_change()
 
     def mark_transcript_translation_unavailable(
         self, pipeline_name: str, transcript_id: int
@@ -356,6 +484,7 @@ class ApplicationState:
             ):
                 updated = dict(entry)
                 updated["translation_status"] = "unavailable"
+                updated["pair_status"] = "source_without_translation"
                 self._transcripts[index] = updated
                 self._publish_change()
                 return
@@ -367,6 +496,23 @@ class ApplicationState:
                 return self.snapshot()
             self._transcripts.clear()
             return self._publish_change()
+
+    def _trim_transcription_history(self, pipeline_name: PipelineName) -> None:
+        """Retain the newest transcript entries independently for one direction."""
+        matching_indices = [
+            index
+            for index, entry in enumerate(self._transcripts)
+            if entry["pipeline"] == pipeline_name
+        ]
+        excess = len(matching_indices) - TRANSCRIPTION_HISTORY_LIMIT_PER_PIPELINE
+        if excess <= 0:
+            return
+        discarded_indices = set(matching_indices[:excess])
+        self._transcripts = [
+            entry
+            for index, entry in enumerate(self._transcripts)
+            if index not in discarded_indices
+        ]
 
     async def set_mode(self, name: str, mode: str | PipelineMode) -> dict[str, object]:
         """Change a pipeline mode and notify realtime subscribers."""
@@ -401,6 +547,28 @@ class ApplicationState:
                 self._statuses[name] = PipelineStatus.SWITCHING
                 changed = True
             return self._publish_change() if changed else self.snapshot()
+
+    async def test_audio_device(self, direction: str) -> dict[str, object]:
+        """Test the currently active physical microphone or speaker."""
+        if direction not in {"input", "output"}:
+            raise ValueError(f"Unknown physical audio direction '{direction}'.")
+        if self._device_manager is None:
+            raise ValueError("Audio device management is not available.")
+        return await self._device_manager.test_physical_device(
+            cast(Literal["input", "output"], direction)
+        )
+
+    async def test_physical_audio_path(self) -> dict[str, object]:
+        """Test the selected microphone and speaker as one physical path."""
+        if self._device_manager is None:
+            raise ValueError("Audio device management is not available.")
+        return await self._device_manager.test_physical_audio_path()
+
+    def stop_physical_audio_path_test(self) -> bool:
+        """Request playback of the audio captured by the active path test."""
+        if self._device_manager is None:
+            return False
+        return self._device_manager.stop_physical_audio_path_test()
 
     async def set_pipeline_status(
         self, name: str, status: str | PipelineStatus
@@ -443,7 +611,45 @@ class ApplicationState:
             name
             for name in PIPELINE_NAMES
             if name in self._active_pipelines
+            and self._automatic_recording_active_for(name)
+        )
+
+    def _automatic_recording_active_for(self, name: PipelineName) -> bool:
+        """Keep automatic recording limited to the classic pipeline."""
+        return (
+            self._engines[name] is TranslationEngine.CLASSIC
             and self._modes[name] is PipelineMode.TRANSLATE
+        )
+
+    def _target_language_supported(
+        self,
+        role: LanguageRole,
+        language: str,
+    ) -> bool:
+        target_pipeline = TARGET_PIPELINE_BY_LANGUAGE_ROLE[role]
+        return (
+            target_pipeline not in self._active_pipelines
+            or self._engines[target_pipeline] is not TranslationEngine.OPENAI_REALTIME
+            or language in OPENAI_REALTIME_OUTPUT_LANGUAGE_CODES
+        )
+
+    def _validate_target_language(
+        self,
+        role: LanguageRole,
+        language: str,
+    ) -> None:
+        if self._target_language_supported(role, language):
+            return
+        target_pipeline = TARGET_PIPELINE_BY_LANGUAGE_ROLE[role]
+        choices = ", ".join(
+            code
+            for code in SUPPORTED_LANGUAGES
+            if self._target_language_supported(role, code)
+        )
+        raise ValueError(
+            f"Language '{language}' cannot be used as the target of "
+            f"{target_pipeline}: OpenAI Realtime Translate supports these "
+            f"configured output languages: {choices}."
         )
 
     @asynccontextmanager
@@ -473,3 +679,26 @@ class ApplicationState:
         if language not in SUPPORTED_UI_LANGUAGES:
             raise ValueError("Unsupported UI language; expected one of: en, es")
         return cast(UiLanguage, language)
+
+
+def _transcript_timestamp() -> str:
+    """Return the local wall-clock time used to correlate UI cards and WAV files."""
+    return datetime.now().astimezone().strftime("%H:%M:%S")
+
+
+def _transcript_pair_status(
+    source_text: str,
+    translated_text: str,
+    *,
+    final: bool,
+) -> str:
+    """Describe whether both semantic sides of a streaming segment are present."""
+    if source_text and translated_text:
+        return "aligned"
+    if source_text:
+        return (
+            "source_without_translation"
+            if final
+            else "waiting_for_translation"
+        )
+    return "translation_without_source" if final else "waiting_for_source"

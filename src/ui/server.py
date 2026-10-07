@@ -161,6 +161,12 @@ class LocalControlServer:
                     payload["gender"],
                 )
                 await self._write_json(writer, 200, snapshot)
+            elif (
+                method == "PUT"
+                and path.startswith("/api/pipelines/")
+                and path.endswith("/engine")
+            ):
+                raise HttpRequestError(404, "Route not found.")
             elif method == "PUT" and path.startswith("/api/pipelines/"):
                 name = path.removeprefix("/api/pipelines/")
                 payload = self._decode_json(body)
@@ -227,6 +233,37 @@ class LocalControlServer:
                     payload["selection"],
                 )
                 await self._write_json(writer, 200, snapshot)
+            elif method == "POST" and path == "/api/audio-test":
+                try:
+                    result = await self._state.test_physical_audio_path()
+                except ValueError as error:
+                    raise HttpRequestError(400, str(error)) from error
+                except (OSError, RuntimeError) as error:
+                    raise HttpRequestError(409, str(error)) from error
+                LOGGER.info(
+                    "event=physical_audio_path_test_completed result=%s",
+                    result,
+                )
+                await self._write_json(writer, 200, result)
+            elif method == "POST" and path == "/api/audio-test/stop":
+                stopped = self._state.stop_physical_audio_path_test()
+                if not stopped:
+                    raise HttpRequestError(409, "No audio test is recording.")
+                await self._write_json(writer, 200, {"stopping": True})
+            elif method == "POST" and path.startswith("/api/audio-test/"):
+                direction = path.removeprefix("/api/audio-test/")
+                try:
+                    result = await self._state.test_audio_device(direction)
+                except ValueError as error:
+                    raise HttpRequestError(400, str(error)) from error
+                except (OSError, RuntimeError) as error:
+                    raise HttpRequestError(409, str(error)) from error
+                LOGGER.info(
+                    "event=physical_audio_test_completed direction=%s result=%s",
+                    direction,
+                    result,
+                )
+                await self._write_json(writer, 200, result)
             elif method == "PUT" and path == "/api/audio-recording":
                 payload = self._decode_json(body)
                 if not isinstance(payload.get("active"), bool):

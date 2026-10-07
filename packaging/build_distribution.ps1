@@ -207,6 +207,7 @@ $pyInstallerArguments = @(
     "--add-data", "$(Join-Path $repositoryRoot 'config\default.toml');config",
     "--add-data", "$(Join-Path $repositoryRoot 'src\ui\index.html');ui",
     "--add-data", "$(Join-Path $repositoryRoot 'src\audio\models');audio\models",
+    "--collect-all", "aec_audio_processing",
     "--exclude-module", "silero_vad",
     "--exclude-module", "torch",
     "--exclude-module", "torchaudio",
@@ -228,6 +229,7 @@ Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\distribution.md") -Desti
 $licenseDirectory = Join-Path $bundleDirectory "THIRD_PARTY_LICENSES"
 New-Item -ItemType Directory -Path $licenseDirectory | Out-Null
 Copy-Item -LiteralPath (Join-Path $repositoryRoot "src\audio\models\LICENSE") -Destination (Join-Path $licenseDirectory "SILERO_VAD_LICENSE.txt")
+Copy-Item -LiteralPath (Join-Path $repositoryRoot "packaging\licenses\AEC_AUDIO_PROCESSING_LICENSE.txt") -Destination (Join-Path $licenseDirectory "AEC_AUDIO_PROCESSING_LICENSE.txt")
 
 $cableSourceDirectory = Join-Path $repositoryRoot "packaging\VBCable_A_B"
 $cableGuide = Join-Path $repositoryRoot "docs\vb-cable-setup.md"

@@ -4,6 +4,7 @@ import struct
 import unittest
 
 from audio.pcm import (
+    apply_int16_gain,
     calculate_block_bytes,
     calculate_block_frames,
     convert_int16_channels,
@@ -51,6 +52,24 @@ class PCMConversionTests(unittest.TestCase):
     def test_passthrough_rejects_unsupported_channel_layout(self) -> None:
         with self.assertRaisesRegex(ValueError, "3 -> 2"):
             convert_int16_channels(b"", 3, 2)
+
+    def test_gain_amplifies_and_saturates_pcm16_safely(self) -> None:
+        pcm = struct.pack("<hhhh", -20_000, -1_000, 1_000, 20_000)
+
+        amplified, clipped = apply_int16_gain(pcm, 6.0)
+
+        samples = struct.unpack("<hhhh", amplified)
+        self.assertEqual((-32768, 32767), (samples[0], samples[-1]))
+        self.assertGreater(abs(samples[1]), 1_900)
+        self.assertEqual(2, clipped)
+
+    def test_zero_gain_preserves_the_original_buffer(self) -> None:
+        pcm = struct.pack("<hh", -123, 456)
+
+        unchanged, clipped = apply_int16_gain(pcm, 0.0)
+
+        self.assertIs(unchanged, pcm)
+        self.assertEqual(0, clipped)
 
     def test_calculate_block_frames_rounds_to_a_positive_frame_count(self) -> None:
         self.assertEqual(calculate_block_frames(44_100, 20), 882)

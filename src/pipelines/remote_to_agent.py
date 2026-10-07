@@ -11,6 +11,7 @@ import sounddevice as sd
 
 from audio.capture import QueuedAudioInput
 from audio.device_manager import AudioDeviceManager
+from audio.webrtc_aec3 import WebRtcAec3
 from audio.portaudio import (
     AudioDeviceError,
     format_device,
@@ -25,10 +26,7 @@ from audio.speech_segmentation import (
     create_speech_segmenter,
 )
 from audio.wav_capture import QueuedDiagnosticWavCapture
-from audio.resampling import (
-    StreamingPcmInt16Resampler,
-    create_resampler,
-)
+from audio.resampling import PcmInt16Resampler, create_resampler
 from audio.voice_detection import StreamingVoiceDetector, VoiceDetectorLoader
 from config import set_log_pipeline
 from app_state import ApplicationState, PipelineMode
@@ -114,6 +112,7 @@ class RemoteToAgentPipeline:
         control_state: ApplicationState | None = None,
         device_manager: AudioDeviceManager | None = None,
         metrics_writer: CsvMetricsWriter | None = None,
+        aec3: WebRtcAec3 | None = None,
     ) -> None:
         self.config = config
         self.provider_factory = provider_factory
@@ -126,6 +125,7 @@ class RemoteToAgentPipeline:
         self.control_state = control_state
         self.device_manager = device_manager
         self.metrics_writer = metrics_writer
+        self.aec3 = aec3 or WebRtcAec3()
         self.statistics = PipelineStatistics()
         self.transcript_queue: asyncio.Queue[TimedTranscript] = asyncio.Queue(
             maxsize=self.TRANSCRIPT_QUEUE_CAPACITY
@@ -139,7 +139,8 @@ class RemoteToAgentPipeline:
         self._voice_detector: StreamingVoiceDetector | None = None
         self._voice_detector_load_error: BaseException | None = None
         self._speech_segmenter: AdaptiveSpeechSegmenter | None = None
-        self._input_resampler: StreamingPcmInt16Resampler | None = None
+        self._input_resampler: PcmInt16Resampler | None = None
+        self._passthrough_resampler: PcmInt16Resampler | None = None
         self.playback_backlog_discard_age_seconds = 4.0
         self.segment_discard_age_seconds = 8.0
         self.playback_backlog_segments_to_keep = 2
@@ -178,9 +179,12 @@ class RemoteToAgentPipeline:
             latency_protection_config["playback_backlog_segments_to_keep"]
         )
         self.latency_protection_enabled = bool(latency_protection_config["enabled"])
-        voice_detection_config = dict(pipeline_config["voice_detection"])
-        segmentation_config = dict(pipeline_config["segmentation"])
-        voice_detection_backend = str(self.config["voice_detection"]["backend"])
+        classic_config = dict(pipeline_config["classic"])
+        voice_detection_config = dict(classic_config["voice_detection"])
+        segmentation_config = dict(classic_config["segmentation"])
+        voice_detection_backend = str(
+            self.config["classic_pipeline"]["voice_detection"]["backend"]
+        )
         stt_max_audio_catchup_ms = float(
             pipeline_config["stt_max_audio_catchup_ms"]
         )
@@ -207,12 +211,49 @@ class RemoteToAgentPipeline:
         input_device = self.device_manager.active_index(input_key)
         output_device = self.device_manager.active_index(output_key)
         capture_channels = int(pipeline_config["input_channels"])
-        validate_input_settings(
-            input_device,
-            capture_rate,
-            capture_channels,
-            str(audio["sample_format"]),
+        capture = QueuedAudioInput(
+            input_device=input_device,
+            sample_rate=capture_rate,
+            channels=capture_channels,
+            dtype=str(audio["sample_format"]),
+            frame_duration_ms=float(audio["frame_duration_ms"]),
+            queue_capacity_blocks=int(stt_config["queue_capacity_blocks"]),
+            negotiate_format=input_key == "input",
+            exclusive=(
+                input_key == "input"
+                and bool(
+                    audio.get("physical_capture_exclusive_mode", True)
+                )
+            ),
         )
+        if input_key == "input":
+            while True:
+                try:
+                    await asyncio.to_thread(capture.prepare)
+                    await self.device_manager.report_physical_device_healthy(
+                        "input",
+                        input_device,
+                        sample_rate=capture.sample_rate,
+                        channels=capture.channels,
+                    )
+                    break
+                except Exception as error:
+                    changed = await self.device_manager.report_physical_device_failed(
+                        "input", input_device, error
+                    )
+                    if not changed:
+                        raise
+                    input_device = self.device_manager.active_index("input")
+                    capture.input_device_reference = input_device
+            capture_rate = capture.sample_rate
+            capture_channels = capture.channels
+        else:
+            validate_input_settings(
+                input_device,
+                capture_rate,
+                capture_channels,
+                str(audio["sample_format"]),
+            )
         validate_output_settings(
             output_device,
             output_sample_rate,
@@ -327,13 +368,14 @@ class RemoteToAgentPipeline:
                 float(audio["frame_duration_ms"]),
             ),
         )
-        capture = QueuedAudioInput(
-            input_device=input_device,
-            sample_rate=capture_rate,
-            channels=capture_channels,
-            dtype=str(audio["sample_format"]),
-            frame_duration_ms=float(audio["frame_duration_ms"]),
-            queue_capacity_blocks=int(stt_config["queue_capacity_blocks"]),
+        self._passthrough_resampler = create_resampler(
+            resampling_config,
+            capture_rate,
+            output_sample_rate,
+            output_block_frames=calculate_block_frames(
+                output_sample_rate,
+                float(audio["frame_duration_ms"]),
+            ),
         )
         stop_sender = asyncio.Event()
         stop_translation = asyncio.Event()
@@ -355,7 +397,7 @@ class RemoteToAgentPipeline:
         try:
             if self.startup_barrier is not None:
                 await self.startup_barrier.wait()
-            capture.start()
+            await asyncio.to_thread(capture.start)
             voice_detector_load_task = asyncio.create_task(
                 self._load_voice_detector(
                     voice_detection_backend,
@@ -372,9 +414,9 @@ class RemoteToAgentPipeline:
                         capture,
                         stt,
                         stop_sender,
-                        capture_channels,
                         output_device,
                         output_channels,
+                        output_sample_rate,
                         voice_detector_load_task,
                         speech_segmenter,
                         stt_max_audio_catchup_ms,
@@ -423,7 +465,13 @@ class RemoteToAgentPipeline:
             }
             if self.pipeline_name == "agent_to_remote":
                 tasks["physical input monitor"] = asyncio.create_task(
-                    self._monitor_physical_input(capture, self.device_manager)
+                    self._monitor_physical_input(
+                        capture,
+                        self.device_manager,
+                        resampling_config,
+                        processing_rate,
+                        output_sample_rate,
+                    )
                 )
             if self.pipeline_name == "remote_to_agent":
                 tasks["virtual input monitor"] = asyncio.create_task(
@@ -605,9 +653,9 @@ class RemoteToAgentPipeline:
         capture: QueuedAudioInput,
         stt: SpeechToText,
         stop: asyncio.Event,
-        channels: int,
         output_device: int,
         output_channels: int,
+        output_sample_rate: int,
         voice_detector_load_task: asyncio.Task[StreamingVoiceDetector],
         speech_segmenter: AdaptiveSpeechSegmenter,
         stt_max_audio_catchup_ms: float,
@@ -618,8 +666,8 @@ class RemoteToAgentPipeline:
         input_audio_capture: QueuedDiagnosticWavCapture,
         output_audio_capture: QueuedDiagnosticWavCapture,
     ) -> None:
-        if self._input_resampler is None:
-            raise RuntimeError("Input resampler has not been initialized.")
+        if self._input_resampler is None or self._passthrough_resampler is None:
+            raise RuntimeError("Input resamplers have not been initialized.")
         pacer = RealtimeAudioPacer(
             capture.frame_duration_ms,
             stt_max_audio_catchup_ms,
@@ -630,10 +678,21 @@ class RemoteToAgentPipeline:
         ) * 2
         live_output = QueuedAudioOutput(
             output_device=output_device,
-            sample_rate=capture.sample_rate,
+            sample_rate=output_sample_rate,
             channels=output_channels,
             dtype=capture.dtype,
-            frames_per_block=capture.frames_per_block,
+            frames_per_block=calculate_block_frames(
+                output_sample_rate, capture.frame_duration_ms
+            ),
+            played_observer=(
+                lambda block: self.aec3.observe_render(
+                    block,
+                    sample_rate=output_sample_rate,
+                    channels=output_channels,
+                )
+                if self.pipeline_name == "remote_to_agent"
+                else None
+            ),
         )
         self._live_output = live_output
         detector_load_checked = False
@@ -644,7 +703,7 @@ class RemoteToAgentPipeline:
         output_switch_error: str | None = None
         next_keepalive_at = time.monotonic() + stt_keepalive_seconds
         recording_observed = False
-        barge_in_suppressed = False
+        aec_call_observed: bool | None = None
         logger.info(
             "event=pipeline_mode_observed requested_mode=%s effective_mode=%s",
             requested_mode.value,
@@ -694,6 +753,21 @@ class RemoteToAgentPipeline:
                 if block is None:
                     await asyncio.sleep(0.005)
                     continue
+                mono = convert_int16_channels(block, capture.channels, 1)
+                if self.pipeline_name == "agent_to_remote":
+                    call_active = self._call_session_active()
+                    if call_active != aec_call_observed:
+                        aec_call_observed = call_active
+                        self.aec3.reset()
+                        logger.info(
+                            "event=webrtc_aec3_call_state_changed active=%s",
+                            call_active,
+                        )
+                    if call_active:
+                        mono = self.aec3.process_capture(
+                            mono,
+                            sample_rate=capture.sample_rate,
+                        )
                 recording_active = self._should_record_audio()
                 if recording_active is not recording_observed:
                     recording_observed = recording_active
@@ -734,31 +808,6 @@ class RemoteToAgentPipeline:
                         pacer.reset()
                         self._reset_processing_audio()
                         next_keepalive_at = time.monotonic() + stt_keepalive_seconds
-                capture_suppressed = (
-                    self.control_state is not None
-                    and self.control_state.is_capture_suppressed_by_barge_in(
-                        self.pipeline_name
-                    )
-                )
-                if capture_suppressed:
-                    if not barge_in_suppressed:
-                        barge_in_suppressed = True
-                        self._reset_processing_audio()
-                        pacer.reset()
-                        logger.debug(
-                            "event=barge_in_suppression_started pipeline=%s "
-                            "reason=opposite_translated_playback",
-                            self.pipeline_name,
-                        )
-                    continue
-                if barge_in_suppressed:
-                    barge_in_suppressed = False
-                    self._reset_processing_audio()
-                    pacer.reset()
-                    logger.debug(
-                        "event=barge_in_suppression_ended pipeline=%s",
-                        self.pipeline_name,
-                    )
                 if mode is PipelineMode.PASSTHROUGH:
                     if self._tts_playback_active:
                         continue
@@ -771,16 +820,18 @@ class RemoteToAgentPipeline:
                     if desired_status != reported_status:
                         await self._set_pipeline_status(desired_status)
                         reported_status = desired_status
-                    output_block = convert_int16_channels(
-                        block, channels, output_channels
-                    )
-                    if recording_active:
-                        output_audio_capture.write(output_block)
-                    if not live_output.started:
-                        live_output.start(initial_blocks=(output_block,))
-                        logger.info("event=passthrough_ready")
-                    else:
-                        live_output.push_block(output_block)
+                    passthrough_blocks = self._passthrough_resampler.process(mono)
+                    for passthrough_mono in passthrough_blocks:
+                        output_block = convert_int16_channels(
+                            passthrough_mono, 1, output_channels
+                        )
+                        if recording_active:
+                            output_audio_capture.write(output_block)
+                        if not live_output.started:
+                            live_output.start(initial_blocks=(output_block,))
+                            logger.info("event=passthrough_ready")
+                        else:
+                            live_output.push_block(output_block)
                     continue
                 initialized_now = await ensure_providers()
                 if self._current_mode() is not PipelineMode.TRANSLATE:
@@ -827,7 +878,6 @@ class RemoteToAgentPipeline:
                     raise RuntimeError(
                         "Translation became effective before voice detection was ready."
                     )
-                mono = convert_int16_channels(block, channels, 1)
                 processed_blocks = self._input_resampler.process(mono)
                 forwarded_any = False
                 for processed_mono in processed_blocks:
@@ -1031,7 +1081,7 @@ class RemoteToAgentPipeline:
         live_output = self._live_output
         if live_output is None:
             raise RuntimeError("Translated output is not initialized.")
-        resampler: StreamingPcmInt16Resampler | None = None
+        resampler: PcmInt16Resampler | None = None
         pending_input = bytearray()
         output_pcm_bytes = 0
         output_underflows_before = live_output.output_underflows
@@ -1081,13 +1131,6 @@ class RemoteToAgentPipeline:
                         return
                     await asyncio.sleep(frame_duration_ms / 4_000)
                 live_output.push_block(block)
-                if self.control_state is not None:
-                    self.control_state.note_translated_playback(
-                        self.pipeline_name,
-                        buffered_audio_ms=(
-                            max(1, live_output.buffered_blocks) * frame_duration_ms
-                        ),
-                    )
                 if output_audio_capture is not None and self._should_record_audio():
                     output_audio_capture.write(block)
                 output_pcm_bytes += len(block)
@@ -1124,6 +1167,7 @@ class RemoteToAgentPipeline:
             values: dict[str, object] = {
                 "pipeline": self.pipeline_name,
                 "mode": self._current_mode().value,
+                "engine": "classic",
                 "capture_blocks": capture.statistics.captured_blocks,
                 "capture_dropped_blocks": capture.statistics.dropped_blocks,
                 "capture_overflows": capture.statistics.input_overflows,
@@ -1268,7 +1312,7 @@ class RemoteToAgentPipeline:
         detector_load_started = time.perf_counter()
         try:
             voice_detector = await self.voice_detector_loader.load(
-                self.config["voice_detection"],
+                self.config["classic_pipeline"]["voice_detection"],
                 pipeline_settings,
                 processing_rate,
                 frame_duration_ms=frame_duration_ms,
@@ -1341,9 +1385,21 @@ class RemoteToAgentPipeline:
     def _should_record_audio(self) -> bool:
         if not self._audio_recording_enabled:
             return False
+        if not self._call_session_active():
+            return False
         if self.control_state is None:
             return self._current_mode() is PipelineMode.TRANSLATE
         return self.control_state.is_audio_recording_active_for(self.pipeline_name)
+
+    def _call_session_active(self) -> bool:
+        if self.device_manager is None:
+            return True
+        route = (
+            "translated_output"
+            if self.pipeline_name == "agent_to_remote"
+            else "remote_input"
+        )
+        return self.device_manager.application_session_active(route) is True
 
     def _current_output_device(self, fallback: int) -> int:
         if self.device_manager is not None and self.pipeline_name == "remote_to_agent":
@@ -1356,6 +1412,9 @@ class RemoteToAgentPipeline:
         self,
         capture: QueuedAudioInput,
         manager: AudioDeviceManager,
+        resampling_config: dict[str, object],
+        processing_rate: int,
+        output_sample_rate: int,
     ) -> None:
         revision = manager.revision("input")
         switch_error: str | None = None
@@ -1365,7 +1424,29 @@ class RemoteToAgentPipeline:
                 target = manager.active_index("input")
                 try:
                     await asyncio.to_thread(capture.switch_device, target)
+                    self._input_resampler = create_resampler(
+                        resampling_config,
+                        capture.sample_rate,
+                        processing_rate,
+                        output_block_frames=calculate_block_frames(
+                            processing_rate, capture.frame_duration_ms
+                        ),
+                    )
+                    self._passthrough_resampler = create_resampler(
+                        resampling_config,
+                        capture.sample_rate,
+                        output_sample_rate,
+                        output_block_frames=calculate_block_frames(
+                            output_sample_rate, capture.frame_duration_ms
+                        ),
+                    )
                     self._reset_processing_audio()
+                    await manager.report_physical_device_healthy(
+                        "input",
+                        target,
+                        sample_rate=capture.sample_rate,
+                        channels=capture.channels,
+                    )
                     if switch_error is not None:
                         logger.info(
                             "event=audio_device_switch_recovered direction=input device=%s",
@@ -1383,7 +1464,11 @@ class RemoteToAgentPipeline:
                             detail,
                         )
                         switch_error = detail
-                    await asyncio.sleep(1.0)
+                    changed = await manager.report_physical_device_failed(
+                        "input", target, error
+                    )
+                    if not changed:
+                        await asyncio.sleep(1.0)
                     if manager.revision("input") != revision:
                         revision = manager.revision("input")
 

@@ -1,6 +1,7 @@
 """Configuration loading for Twin Tongue."""
 
 import atexit
+from copy import deepcopy
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 import logging
@@ -267,7 +268,7 @@ def set_log_pipeline(name: str) -> Token[str]:
 
 REQUIRED_SECTIONS = (
     "audio",
-    "voice_detection",
+    "classic_pipeline",
     "pipelines",
     "providers",
     "stt",
@@ -281,9 +282,10 @@ REQUIRED_AUDIO_KEYS = (
     "sample_format",
     "frame_duration_ms",
     "device_poll_interval_seconds",
+    "aec3",
+    "virtual_cables",
     "resampling",
 )
-REQUIRED_BARGE_IN_KEYS = ("enabled", "resume_delay_ms")
 SUPPORTED_LANGUAGE_CODES = {"en", "es", "fr", "ca"}
 REQUIRED_PIPELINE_KEYS = (
     "enabled",
@@ -295,9 +297,9 @@ REQUIRED_PIPELINE_KEYS = (
     "output_sample_rate",
     "stt_max_audio_catchup_ms",
     "latency_protection",
-    "voice_detection",
-    "segmentation",
+    "classic",
 )
+REQUIRED_CLASSIC_PIPELINE_KEYS = ("voice_detection", "segmentation")
 REQUIRED_LATENCY_PROTECTION_KEYS = (
     "enabled",
     "playback_backlog_discard_age_seconds",
@@ -333,6 +335,43 @@ REQUIRED_TRANSLATION_KEYS = (
     "endpoint",
     "format",
 )
+SUPPORTED_TRANSLATION_ENGINES = {"classic", "openai_realtime"}
+REQUIRED_OPENAI_REALTIME_KEYS = (
+    "endpoint",
+    "model",
+    "sample_rate",
+    "send_chunk_duration_ms",
+    "input_queue_capacity_blocks",
+    "send_queue_capacity_frames",
+    "received_queue_capacity_blocks",
+    "playback_queue_capacity_blocks",
+    "reconnect_max_attempts",
+    "reconnect_base_delay_seconds",
+    "reconnect_cooldown_seconds",
+    "session_setup_timeout_seconds",
+    "close_timeout_seconds",
+    "metrics_interval_seconds",
+    "log_transcript_deltas",
+    "transcript_ui_update_interval_ms",
+    "transcript_segment_idle_ms",
+    "transcript_alignment_wait_ms",
+    "provider_delay_warning_ms",
+    "provider_delay_recovery_ms",
+    "output_gain_db",
+    "adaptive_playout",
+    "input_transcription",
+    "session_gate",
+    "audio_capture",
+)
+REQUIRED_REALTIME_AUDIO_CAPTURE_KEYS = (
+    "enabled",
+    "directory",
+    "max_seconds_per_file",
+    "tracks",
+)
+REALTIME_AUDIO_CAPTURE_TRACKS = frozenset(
+    {"captured", "accepted", "sent", "received", "played"}
+)
 REQUIRED_TTS_KEYS = (
     "model",
     "voice_id",
@@ -353,6 +392,273 @@ REQUIRED_LOGGING_KEYS = (
 REQUIRED_SERVER_KEYS = ("enabled", "host", "port")
 
 
+def _mapping(value: object, path: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ConfigurationError(f"{path} must be a mapping.")
+    return value
+
+
+def _merge_mappings(
+    defaults: dict[str, Any], overrides: dict[str, Any]
+) -> dict[str, Any]:
+    """Deeply merge direction overrides onto pipeline-type defaults."""
+    merged = deepcopy(defaults)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_mappings(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
+def _resolve_schema_v2(raw: dict[str, Any]) -> dict[str, Any]:
+    """Resolve namespaced TOML into the stable runtime configuration contract."""
+    if raw.get("schema_version") != 2:
+        raise ConfigurationError("schema_version must be 2.")
+    audio_source = _mapping(raw.get("audio"), "audio")
+    resampling_source = _mapping(audio_source.get("resampling"), "audio.resampling")
+    aec3_source = _mapping(audio_source.get("aec3"), "audio.aec3")
+    virtual_cables_source = _mapping(
+        audio_source.get("virtual_cables"), "audio.virtual_cables"
+    )
+    session_monitor_source = _mapping(
+        virtual_cables_source.get("session_monitor"),
+        "audio.virtual_cables.session_monitor",
+    )
+    pipeline = _mapping(raw.get("pipeline"), "pipeline")
+    runtime = _mapping(pipeline.get("runtime"), "pipeline.runtime")
+    classic = _mapping(pipeline.get("classic"), "pipeline.classic")
+    classic_defaults = _mapping(
+        classic.get("defaults"), "pipeline.classic.defaults"
+    )
+    speech_to_speech = _mapping(
+        pipeline.get("speech_to_speech"), "pipeline.speech_to_speech"
+    )
+    speech_defaults = _mapping(
+        speech_to_speech.get("defaults"),
+        "pipeline.speech_to_speech.defaults",
+    )
+
+    default_vad = _mapping(
+        classic_defaults.get("vad"), "pipeline.classic.defaults.vad"
+    )
+    vad_engine = str(default_vad.get("engine", ""))
+    default_vad_engine = _mapping(
+        default_vad.get(vad_engine),
+        f"pipeline.classic.defaults.vad.{vad_engine}",
+    )
+    default_stt = _mapping(
+        classic_defaults.get("stt"), "pipeline.classic.defaults.stt"
+    )
+    stt_engine = str(default_stt.get("engine", ""))
+    stt_settings = _mapping(
+        default_stt.get(stt_engine),
+        f"pipeline.classic.defaults.stt.{stt_engine}",
+    )
+    default_translation = _mapping(
+        classic_defaults.get("translation"),
+        "pipeline.classic.defaults.translation",
+    )
+    translation_engine = str(default_translation.get("engine", ""))
+    translation_settings = _mapping(
+        default_translation.get(translation_engine),
+        f"pipeline.classic.defaults.translation.{translation_engine}",
+    )
+    default_tts = _mapping(
+        classic_defaults.get("tts"), "pipeline.classic.defaults.tts"
+    )
+    tts_engine = str(default_tts.get("engine", ""))
+    tts_settings = _mapping(
+        default_tts.get(tts_engine),
+        f"pipeline.classic.defaults.tts.{tts_engine}",
+    )
+
+    speech_translation = _mapping(
+        speech_defaults.get("translation"),
+        "pipeline.speech_to_speech.defaults.translation",
+    )
+    speech_engine = str(speech_translation.get("engine", ""))
+    speech_settings = _mapping(
+        speech_translation.get(speech_engine),
+        f"pipeline.speech_to_speech.defaults.translation.{speech_engine}",
+    )
+
+    resolved_pipelines: dict[str, dict[str, Any]] = {}
+    resolved_speech_settings: dict[str, dict[str, Any]] = {}
+    for name in ("remote_to_agent", "agent_to_remote"):
+        runtime_direction = _mapping(
+            runtime.get(name), f"pipeline.runtime.{name}"
+        )
+        runtime_audio = _mapping(
+            runtime_direction.get("audio"), f"pipeline.runtime.{name}.audio"
+        )
+        classic_direction = _mapping(
+            classic.get(name), f"pipeline.classic.{name}"
+        )
+        direction_vad = _mapping(
+            classic_direction.get("vad"), f"pipeline.classic.{name}.vad"
+        )
+        selected_vad = str(direction_vad.get("engine", vad_engine))
+        if selected_vad != vad_engine:
+            raise ConfigurationError(
+                f"pipeline.classic.{name}.vad.engine must be {vad_engine!r}."
+            )
+        direction_vad_settings = _mapping(
+            direction_vad.get(selected_vad),
+            f"pipeline.classic.{name}.vad.{selected_vad}",
+        )
+        segmentation = _mapping(
+            classic_direction.get("segmentation"),
+            f"pipeline.classic.{name}.segmentation",
+        )
+        segmentation_engine = str(segmentation.get("engine", ""))
+        segmentation_settings = _mapping(
+            segmentation.get(segmentation_engine),
+            f"pipeline.classic.{name}.segmentation.{segmentation_engine}",
+        )
+        for capability, expected in (
+            ("stt", stt_engine),
+            ("translation", translation_engine),
+            ("tts", tts_engine),
+        ):
+            selection = _mapping(
+                classic_direction.get(capability),
+                f"pipeline.classic.{name}.{capability}",
+            )
+            if selection.get("engine") != expected:
+                raise ConfigurationError(
+                    f"pipeline.classic.{name}.{capability}.engine must be {expected!r}."
+                )
+        direction_speech = _mapping(
+            speech_to_speech.get(name), f"pipeline.speech_to_speech.{name}"
+        )
+        direction_speech_translation = _mapping(
+            direction_speech.get("translation"),
+            f"pipeline.speech_to_speech.{name}.translation",
+        )
+        selected_speech_engine = str(
+            direction_speech_translation.get("engine", speech_engine)
+        )
+        if selected_speech_engine != speech_engine:
+            raise ConfigurationError(
+                f"pipeline.speech_to_speech.{name}.translation.engine must be "
+                f"{speech_engine!r}."
+            )
+        speech_overrides = direction_speech_translation.get(speech_engine, {})
+        if not isinstance(speech_overrides, dict):
+            raise ConfigurationError(
+                f"pipeline.speech_to_speech.{name}.translation.{speech_engine} "
+                "must be a mapping."
+            )
+        resolved_speech_settings[name] = _merge_mappings(
+            speech_settings, speech_overrides
+        )
+        pipeline_type = runtime_direction.get("type")
+        engine = {
+            "classic": "classic",
+            "speech_to_speech": selected_speech_engine,
+        }.get(str(pipeline_type))
+        if engine is None:
+            raise ConfigurationError(
+                f"pipeline.runtime.{name}.type must be 'classic' or "
+                "'speech_to_speech'."
+            )
+        resolved_direction = {
+            "enabled": runtime_direction.get("enabled"),
+            "mode": runtime_direction.get("mode"),
+            "engine": engine,
+            "voice_gender": classic_direction.get("voice_gender"),
+            "stt_max_audio_catchup_ms": classic_direction.get(
+                "stt_max_audio_catchup_ms",
+                classic_defaults.get("stt_max_audio_catchup_ms"),
+            ),
+            "latency_protection": deepcopy(
+                classic_direction.get("latency_protection")
+            ),
+            "classic": {
+                "voice_detection": _merge_mappings(
+                    {}, direction_vad_settings
+                ),
+                "segmentation": deepcopy(segmentation_settings),
+            },
+            **deepcopy(runtime_audio),
+        }
+        resolved_pipelines[name] = resolved_direction
+
+    observability = _mapping(raw.get("observability"), "observability")
+    logging_source = _mapping(
+        observability.get("logging"), "observability.logging"
+    )
+    metrics_source = _mapping(
+        observability.get("metrics"), "observability.metrics"
+    )
+    control_server = _mapping(raw.get("control_server"), "control_server")
+    resolved_audio = {
+        "processing_sample_rate": stt_settings.get("sample_rate"),
+        "sample_format": audio_source.get("sample_format"),
+        "frame_duration_ms": audio_source.get("frame_duration_ms"),
+        "device_poll_interval_seconds": audio_source.get(
+            "device_poll_interval_seconds"
+        ),
+        "physical_capture_exclusive_mode": audio_source.get(
+            "physical_capture_exclusive_mode", True
+        ),
+        "aec3": deepcopy(aec3_source),
+        "virtual_cables": {
+            "session_monitor": deepcopy(session_monitor_source),
+        },
+        "resampling": {
+            "backend": resampling_source.get("engine"),
+            "quality": resampling_source.get("quality"),
+        },
+    }
+    retry = deepcopy(classic_defaults.get("retry"))
+    return {
+        "schema_version": 2,
+        "audio": resolved_audio,
+        "classic_pipeline": {
+            "voice_detection": {
+                "backend": vad_engine,
+                vad_engine: deepcopy(default_vad_engine),
+            }
+        },
+        "pipelines": resolved_pipelines,
+        "providers": {
+            "stt": stt_engine,
+            "translation": (
+                "google_translate_basic_v2"
+                if translation_engine == "google_translate_v2"
+                else translation_engine
+            ),
+            "tts": tts_engine,
+            "retry": retry,
+        },
+        "stt": deepcopy(stt_settings),
+        "translation": deepcopy(translation_settings),
+        "realtime_translation": {
+            "openai": deepcopy(speech_settings),
+            "directions": resolved_speech_settings,
+        },
+        "tts": deepcopy(tts_settings),
+        "logging": {
+            "level": logging_source.get("level"),
+            "file_enabled": logging_source.get("file_enabled"),
+            "log_file": logging_source.get("file"),
+            "log_size_mb": logging_source.get("max_size_mb"),
+            "log_max_files": logging_source.get("max_files"),
+            "log_queue_capacity": logging_source.get("queue_capacity"),
+            "file_flush_interval_seconds": logging_source.get(
+                "file_flush_interval_seconds"
+            ),
+            "metrics_enabled": metrics_source.get("enabled"),
+            "metrics_file": metrics_source.get("file"),
+            "metrics_retention_days": metrics_source.get("retention_days"),
+            "metrics_interval_seconds": metrics_source.get("interval_seconds"),
+        },
+        "server": deepcopy(control_server),
+    }
+
+
 def load_config(path: Path) -> dict[str, Any]:
     """Load and minimally validate a TOML configuration file."""
     if not path.is_file():
@@ -366,6 +672,7 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ConfigurationError(f"Could not read configuration file: {error}") from error
     if not isinstance(config, dict):
         raise ConfigurationError("Configuration must contain a TOML mapping.")
+    config = _resolve_schema_v2(config)
     missing = [section for section in REQUIRED_SECTIONS if section not in config]
     if missing:
         raise ConfigurationError(f"Missing required configuration sections: {', '.join(missing)}")
@@ -376,11 +683,15 @@ def load_config(path: Path) -> dict[str, Any]:
         validate_resampling_settings(resampling)
     except ValueError as error:
         raise ConfigurationError(f"Invalid audio.resampling configuration: {error}") from error
-    voice_detection = config["voice_detection"]
+    classic_pipeline = config["classic_pipeline"]
+    _require_keys(classic_pipeline, ("voice_detection",), "classic_pipeline")
+    voice_detection = classic_pipeline["voice_detection"]
     try:
         validate_voice_detection_settings(voice_detection)
     except ValueError as error:
-        raise ConfigurationError(f"Invalid voice_detection configuration: {error}") from error
+        raise ConfigurationError(
+            f"Invalid classic_pipeline.voice_detection configuration: {error}"
+        ) from error
     processing_rate = config["audio"]["processing_sample_rate"]
     if not isinstance(processing_rate, int) or isinstance(processing_rate, bool) or processing_rate <= 0:
         raise ConfigurationError("audio.processing_sample_rate must be a positive integer.")
@@ -393,29 +704,57 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ConfigurationError(
             "audio.device_poll_interval_seconds must be greater than zero."
         )
-    barge_in = config["pipelines"]["agent_to_remote"].get("barge_in")
-    if not isinstance(barge_in, dict):
-        raise ConfigurationError(
-            "pipelines.agent_to_remote.barge_in must be a mapping."
-        )
-    _require_keys(
-        barge_in,
-        REQUIRED_BARGE_IN_KEYS,
-        "pipelines.agent_to_remote.barge_in",
-    )
-    if not isinstance(barge_in["enabled"], bool):
-        raise ConfigurationError(
-            "pipelines.agent_to_remote.barge_in.enabled must be a boolean."
-        )
-    resume_delay_ms = barge_in["resume_delay_ms"]
-    if (
-        not isinstance(resume_delay_ms, (int, float))
-        or isinstance(resume_delay_ms, bool)
-        or resume_delay_ms < 0
+    if not isinstance(
+        config["audio"]["physical_capture_exclusive_mode"], bool
     ):
         raise ConfigurationError(
-            "pipelines.agent_to_remote.barge_in.resume_delay_ms must not be negative."
+            "audio.physical_capture_exclusive_mode must be a boolean."
         )
+    aec3 = config["audio"]["aec3"]
+    _require_keys(
+        aec3,
+        ("enabled", "stream_delay_ms", "render_queue_capacity_blocks"),
+        "audio.aec3",
+    )
+    if not isinstance(aec3["enabled"], bool):
+        raise ConfigurationError("audio.aec3.enabled must be a boolean.")
+    stream_delay_ms = aec3["stream_delay_ms"]
+    if (
+        not isinstance(stream_delay_ms, int)
+        or isinstance(stream_delay_ms, bool)
+        or stream_delay_ms < 0
+    ):
+        raise ConfigurationError(
+            "audio.aec3.stream_delay_ms must be a non-negative integer."
+        )
+    render_queue_capacity = aec3["render_queue_capacity_blocks"]
+    if (
+        not isinstance(render_queue_capacity, int)
+        or isinstance(render_queue_capacity, bool)
+        or render_queue_capacity < 1
+    ):
+        raise ConfigurationError(
+            "audio.aec3.render_queue_capacity_blocks must be at least one."
+        )
+    virtual_cables = config["audio"]["virtual_cables"]
+    _require_keys(virtual_cables, ("session_monitor",), "audio.virtual_cables")
+    session_monitor = virtual_cables["session_monitor"]
+    _require_keys(
+        session_monitor,
+        ("poll_interval_seconds", "failure_grace_seconds"),
+        "audio.virtual_cables.session_monitor",
+    )
+    for key in ("poll_interval_seconds", "failure_grace_seconds"):
+        value = session_monitor[key]
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or value <= 0
+        ):
+            raise ConfigurationError(
+                f"audio.virtual_cables.session_monitor.{key} "
+                "must be greater than zero."
+            )
     _require_keys(config["providers"], REQUIRED_PROVIDER_KEYS, "providers")
     _require_keys(config["stt"], REQUIRED_STT_KEYS, "stt")
     stt_rate = config["stt"]["sample_rate"]
@@ -506,6 +845,328 @@ def load_config(path: Path) -> dict[str, Any]:
             "stt.audio_capture.flush_interval_seconds must be greater than zero."
         )
     _require_keys(config["translation"], REQUIRED_TRANSLATION_KEYS, "translation")
+    realtime_translation = config.get("realtime_translation")
+    if realtime_translation is not None:
+        if not isinstance(realtime_translation, dict):
+            raise ConfigurationError("realtime_translation must be a mapping.")
+        settings_to_validate = [
+            ("realtime_translation.openai", realtime_translation.get("openai"))
+        ]
+        directions = realtime_translation.get("directions", {})
+        if not isinstance(directions, dict):
+            raise ConfigurationError(
+                "realtime_translation.directions must be a mapping."
+            )
+        settings_to_validate.extend(
+            (f"realtime_translation.directions.{name}", settings)
+            for name, settings in directions.items()
+        )
+        for settings_path, openai_realtime in settings_to_validate:
+            _require_keys(
+                openai_realtime,
+                REQUIRED_OPENAI_REALTIME_KEYS,
+                settings_path,
+            )
+            assert isinstance(openai_realtime, dict)
+            endpoint = openai_realtime["endpoint"]
+            if not isinstance(endpoint, str) or not endpoint.startswith("wss://"):
+                raise ConfigurationError(
+                    f"{settings_path}.endpoint must be a secure WebSocket URL."
+                )
+            model = openai_realtime["model"]
+            if not isinstance(model, str) or not model.strip():
+                raise ConfigurationError(
+                    f"{settings_path}.model must be a non-empty string."
+                )
+            if openai_realtime["sample_rate"] != 24_000:
+                raise ConfigurationError(
+                    f"{settings_path}.sample_rate must be 24000."
+                )
+            if openai_realtime["send_chunk_duration_ms"] != 200:
+                raise ConfigurationError(
+                    f"{settings_path}.send_chunk_duration_ms must be 200."
+                )
+            for key in (
+                "input_queue_capacity_blocks",
+                "send_queue_capacity_frames",
+                "received_queue_capacity_blocks",
+                "playback_queue_capacity_blocks",
+                "reconnect_max_attempts",
+            ):
+                value = openai_realtime[key]
+                if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                    raise ConfigurationError(
+                        f"{settings_path}.{key} must be a positive integer."
+                    )
+            for key in (
+                "reconnect_base_delay_seconds",
+                "reconnect_cooldown_seconds",
+                "session_setup_timeout_seconds",
+                "close_timeout_seconds",
+                "metrics_interval_seconds",
+            ):
+                value = openai_realtime[key]
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or value <= 0
+                ):
+                    raise ConfigurationError(
+                        f"{settings_path}.{key} must be greater than zero."
+                    )
+            if not isinstance(openai_realtime["log_transcript_deltas"], bool):
+                raise ConfigurationError(
+                    f"{settings_path}.log_transcript_deltas must be a boolean."
+                )
+            adaptive_playout = openai_realtime["adaptive_playout"]
+            _require_keys(
+                adaptive_playout,
+                (
+                    "enabled",
+                    "target_backlog_ms",
+                    "accelerated_backlog_ms",
+                    "emergency_backlog_ms",
+                    "recovery_backlog_ms",
+                    "moderate_speed",
+                    "maximum_speed",
+                    "silence_search_ms",
+                    "silence_threshold_dbfs",
+                    "crossfade_ms",
+                ),
+                f"{settings_path}.adaptive_playout",
+            )
+            if not isinstance(adaptive_playout["enabled"], bool):
+                raise ConfigurationError(
+                    f"{settings_path}.adaptive_playout.enabled must be a boolean."
+                )
+            for key in (
+                "target_backlog_ms",
+                "accelerated_backlog_ms",
+                "emergency_backlog_ms",
+                "recovery_backlog_ms",
+                "silence_search_ms",
+                "crossfade_ms",
+            ):
+                value = adaptive_playout[key]
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or value <= 0
+                ):
+                    raise ConfigurationError(
+                        f"{settings_path}.adaptive_playout.{key} "
+                        "must be greater than zero."
+                    )
+            target_backlog = float(adaptive_playout["target_backlog_ms"])
+            accelerated_backlog = float(
+                adaptive_playout["accelerated_backlog_ms"]
+            )
+            emergency_backlog = float(
+                adaptive_playout["emergency_backlog_ms"]
+            )
+            recovery_backlog = float(
+                adaptive_playout["recovery_backlog_ms"]
+            )
+            if not (
+                target_backlog
+                < recovery_backlog
+                < accelerated_backlog
+                < emergency_backlog
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.adaptive_playout backlog thresholds "
+                    "must satisfy target < recovery < accelerated < emergency."
+                )
+            moderate_speed = adaptive_playout["moderate_speed"]
+            maximum_speed = adaptive_playout["maximum_speed"]
+            if (
+                not isinstance(moderate_speed, (int, float))
+                or isinstance(moderate_speed, bool)
+                or not 1.0 < float(moderate_speed) <= 1.15
+                or not isinstance(maximum_speed, (int, float))
+                or isinstance(maximum_speed, bool)
+                or not float(moderate_speed)
+                <= float(maximum_speed)
+                <= 1.25
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.adaptive_playout speeds must satisfy "
+                    "1.0 < moderate_speed <= maximum_speed <= 1.25."
+                )
+            silence_threshold = adaptive_playout["silence_threshold_dbfs"]
+            if (
+                not isinstance(silence_threshold, (int, float))
+                or isinstance(silence_threshold, bool)
+                or not -120.0 <= float(silence_threshold) <= 0.0
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.adaptive_playout."
+                    "silence_threshold_dbfs must be between -120 and 0."
+                )
+            input_transcription = openai_realtime["input_transcription"]
+            _require_keys(
+                input_transcription,
+                ("enabled", "model"),
+                f"{settings_path}.input_transcription",
+            )
+            if not isinstance(input_transcription["enabled"], bool):
+                raise ConfigurationError(
+                    f"{settings_path}.input_transcription.enabled must be a boolean."
+                )
+            transcription_model = input_transcription["model"]
+            if (
+                not isinstance(transcription_model, str)
+                or not transcription_model.strip()
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.input_transcription.model "
+                    "must be a non-empty string."
+                )
+            session_gate = openai_realtime["session_gate"]
+            _require_keys(
+                session_gate,
+                ("enabled", "prewarm_session", "disconnect_grace_seconds"),
+                f"{settings_path}.session_gate",
+            )
+            if not isinstance(session_gate["enabled"], bool):
+                raise ConfigurationError(
+                    f"{settings_path}.session_gate.enabled must be a boolean."
+                )
+            if not isinstance(session_gate["prewarm_session"], bool):
+                raise ConfigurationError(
+                    f"{settings_path}.session_gate.prewarm_session must be "
+                    "a boolean."
+                )
+            disconnect_grace = session_gate["disconnect_grace_seconds"]
+            if (
+                not isinstance(disconnect_grace, (int, float))
+                or isinstance(disconnect_grace, bool)
+                or disconnect_grace < 0
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.session_gate.disconnect_grace_seconds "
+                    "must not be negative."
+                )
+            audio_capture = openai_realtime["audio_capture"]
+            _require_keys(
+                audio_capture,
+                REQUIRED_REALTIME_AUDIO_CAPTURE_KEYS,
+                f"{settings_path}.audio_capture",
+            )
+            if not isinstance(audio_capture["enabled"], bool):
+                raise ConfigurationError(
+                    f"{settings_path}.audio_capture.enabled must be a boolean."
+                )
+            capture_directory = audio_capture["directory"]
+            if (
+                not isinstance(capture_directory, str)
+                or not capture_directory.strip()
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.audio_capture.directory must be a "
+                    "non-empty path."
+                )
+            max_capture_seconds = audio_capture["max_seconds_per_file"]
+            if (
+                not isinstance(max_capture_seconds, (int, float))
+                or isinstance(max_capture_seconds, bool)
+                or max_capture_seconds <= 0
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.audio_capture.max_seconds_per_file "
+                    "must be greater than zero."
+                )
+            if not isinstance(
+                audio_capture.get("write_timing_marks", True), bool
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.audio_capture.write_timing_marks "
+                    "must be a boolean."
+                )
+            capture_tracks = audio_capture["tracks"]
+            if (
+                not isinstance(capture_tracks, list)
+                or not capture_tracks
+                or any(
+                    not isinstance(track, str)
+                    or track not in REALTIME_AUDIO_CAPTURE_TRACKS
+                    for track in capture_tracks
+                )
+                or len(set(capture_tracks)) != len(capture_tracks)
+            ):
+                allowed_tracks = ", ".join(sorted(REALTIME_AUDIO_CAPTURE_TRACKS))
+                raise ConfigurationError(
+                    f"{settings_path}.audio_capture.tracks must be a non-empty "
+                    f"list of unique track names chosen from: {allowed_tracks}."
+                )
+            for key, default in (
+                ("queue_capacity_blocks", 500),
+                ("write_buffer_kb", 64),
+            ):
+                value = audio_capture.get(key, default)
+                if (
+                    not isinstance(value, int)
+                    or isinstance(value, bool)
+                    or value < 1
+                ):
+                    raise ConfigurationError(
+                        f"{settings_path}.audio_capture.{key} must be "
+                        "an integer of at least one."
+                    )
+            capture_flush_interval = audio_capture.get(
+                "flush_interval_seconds", 1.0
+            )
+            if (
+                not isinstance(capture_flush_interval, (int, float))
+                or isinstance(capture_flush_interval, bool)
+                or capture_flush_interval <= 0
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.audio_capture.flush_interval_seconds "
+                    "must be greater than zero."
+                )
+            for key in (
+                "transcript_ui_update_interval_ms",
+                "transcript_segment_idle_ms",
+                "transcript_alignment_wait_ms",
+            ):
+                value = openai_realtime[key]
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or value <= 0
+                ):
+                    raise ConfigurationError(
+                        f"{settings_path}.{key} must be greater than zero."
+                    )
+            warning_delay = openai_realtime["provider_delay_warning_ms"]
+            recovery_delay = openai_realtime["provider_delay_recovery_ms"]
+            for key, value in (
+                ("provider_delay_warning_ms", warning_delay),
+                ("provider_delay_recovery_ms", recovery_delay),
+            ):
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or value < 0
+                ):
+                    raise ConfigurationError(
+                        f"{settings_path}.{key} must not be negative."
+                    )
+            if float(recovery_delay) >= float(warning_delay):
+                raise ConfigurationError(
+                    f"{settings_path} provider delay thresholds must satisfy "
+                    "recovery < warning."
+                )
+            output_gain_db = openai_realtime["output_gain_db"]
+            if (
+                not isinstance(output_gain_db, (int, float))
+                or isinstance(output_gain_db, bool)
+                or not -12.0 <= float(output_gain_db) <= 12.0
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.output_gain_db must be between -12 and 12."
+                )
     _require_keys(config["tts"], REQUIRED_TTS_KEYS, "tts")
     tts_rate = config["tts"]["sample_rate"]
     if (
@@ -605,6 +1266,12 @@ def load_config(path: Path) -> dict[str, Any]:
         if name not in config["pipelines"]:
             raise ConfigurationError(f"Missing required pipeline configuration: {name}")
         _require_keys(config["pipelines"][name], REQUIRED_PIPELINE_KEYS, f"pipelines.{name}")
+        engine = config["pipelines"][name].get("engine", "classic")
+        if engine not in SUPPORTED_TRANSLATION_ENGINES:
+            choices = ", ".join(sorted(SUPPORTED_TRANSLATION_ENGINES))
+            raise ConfigurationError(
+                f"pipelines.{name}.engine must be one of: {choices}."
+            )
         if config["pipelines"][name]["mode"] not in {"translate", "passthrough"}:
             raise ConfigurationError(
                 f"pipelines.{name}.mode must be 'translate' or 'passthrough'."
@@ -669,31 +1336,37 @@ def load_config(path: Path) -> dict[str, Any]:
             )
     for name in ("remote_to_agent", "agent_to_remote"):
         pipeline = config["pipelines"][name]
+        classic = pipeline["classic"]
+        _require_keys(
+            classic,
+            REQUIRED_CLASSIC_PIPELINE_KEYS,
+            f"pipelines.{name}.classic",
+        )
         try:
             validate_voice_detection_settings(
                 voice_detection,
-                pipeline["voice_detection"],
+                classic["voice_detection"],
             )
         except ValueError as error:
             raise ConfigurationError(
-                f"Invalid pipelines.{name}.voice_detection configuration: {error}"
+                f"Invalid pipelines.{name}.classic.voice_detection configuration: {error}"
             ) from error
-        segmentation = pipeline["segmentation"]
+        segmentation = classic["segmentation"]
         _require_keys(
             segmentation,
             REQUIRED_SEGMENTATION_KEYS,
-            f"pipelines.{name}.segmentation",
+            f"pipelines.{name}.classic.segmentation",
         )
         try:
             validate_speech_segmentation_settings(
                 segmentation,
                 voice_end_silence_duration_ms=float(
-                    pipeline["voice_detection"]["min_silence_duration_ms"]
+                    classic["voice_detection"]["min_silence_duration_ms"]
                 ),
             )
         except ValueError as error:
             raise ConfigurationError(
-                f"Invalid pipelines.{name}.segmentation configuration: {error}"
+                f"Invalid pipelines.{name}.classic.segmentation configuration: {error}"
             ) from error
     server = config["server"]
     if not isinstance(server["enabled"], bool):

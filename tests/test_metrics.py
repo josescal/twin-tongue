@@ -14,6 +14,27 @@ class CsvMetricsWriterTests(unittest.TestCase):
         self.assertFalse(any(field.endswith("_seconds") for field in METRIC_FIELDS))
         self.assertTrue(any(field.endswith("_ms") for field in METRIC_FIELDS))
 
+    def test_realtime_receive_queue_diagnostics_are_persisted(self) -> None:
+        self.assertIn("realtime_received_queue_buffered_ms", METRIC_FIELDS)
+        self.assertIn("realtime_received_queue_dropped_blocks", METRIC_FIELDS)
+        self.assertIn("realtime_received_queue_discontinuities", METRIC_FIELDS)
+
+    def test_realtime_support_diagnostics_are_metrics_not_log_only(self) -> None:
+        for field in (
+            "realtime_input_rms_dbfs",
+            "realtime_output_peak_amplitude",
+            "realtime_playback_maximum_callback_gap_ms",
+            "realtime_session_gate_observation",
+            "realtime_session_gate_call_active",
+            "realtime_session_gate_blocked_ms",
+            "realtime_provider_audio_lag_ms",
+            "realtime_provider_audio_lag_p95_ms",
+            "realtime_provider_delayed",
+            "realtime_output_gain_db",
+            "realtime_output_gain_clipped_samples",
+        ):
+            self.assertIn(field, METRIC_FIELDS)
+
     def test_writes_one_header_and_processable_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "metrics.csv"

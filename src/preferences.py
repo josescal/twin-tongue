@@ -77,6 +77,9 @@ class UserPreferences:
         if not isinstance(stored_devices, dict):
             stored_devices = {}
         self._audio_devices: dict[DeviceDirection, dict[str, str | None]] = {}
+        self._last_working_audio_devices: dict[
+            DeviceDirection, dict[str, str | None]
+        ] = {}
         for direction in DEVICE_DIRECTIONS:
             stored = stored_devices.get(direction, {})
             if not isinstance(stored, dict):
@@ -89,6 +92,18 @@ class UserPreferences:
             self._audio_devices[direction] = {
                 "stable_id": stable_id,
                 "name": name if isinstance(name, str) else None,
+            }
+            last_working = payload.get("last_working_audio_devices", {})
+            if not isinstance(last_working, dict):
+                last_working = {}
+            stored_last = last_working.get(direction, {})
+            if not isinstance(stored_last, dict):
+                stored_last = {}
+            last_id = stored_last.get("stable_id")
+            last_name = stored_last.get("name")
+            self._last_working_audio_devices[direction] = {
+                "stable_id": last_id if isinstance(last_id, str) else None,
+                "name": last_name if isinstance(last_name, str) else None,
             }
         self._save()
 
@@ -141,6 +156,22 @@ class UserPreferences:
         self._audio_devices[direction] = {"stable_id": stable_id, "name": name}
         self._save()
 
+    def last_working_audio_device(
+        self, direction: DeviceDirection
+    ) -> dict[str, str | None]:
+        return dict(self._last_working_audio_devices[direction])
+
+    def set_last_working_audio_device(
+        self,
+        direction: DeviceDirection,
+        stable_id: str,
+        name: str,
+    ) -> None:
+        value = {"stable_id": stable_id, "name": name}
+        if self._last_working_audio_devices[direction] != value:
+            self._last_working_audio_devices[direction] = value
+            self._save()
+
     def _read(self) -> dict[str, object]:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
@@ -159,6 +190,10 @@ class UserPreferences:
                     **selected,
                 }
                 for direction, selected in self._audio_devices.items()
+            },
+            "last_working_audio_devices": {
+                direction: dict(selected)
+                for direction, selected in self._last_working_audio_devices.items()
             },
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)

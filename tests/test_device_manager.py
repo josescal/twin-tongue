@@ -131,6 +131,39 @@ class AudioDeviceManagerPhysicalSelectionTests(unittest.IsolatedAsyncioTestCase)
         saved = json.loads(self.preference_path.read_text(encoding="utf-8"))
         self.assertEqual("automatic", saved["audio_devices"]["input"]["mode"])
 
+    async def test_failed_microphone_is_quarantined_and_last_working_is_persisted(
+        self,
+    ) -> None:
+        await self.refresh_with([
+            device("mic-webcam", "S65VC Webcam", 7, default=True),
+            device("mic-intel", "Intel Smart Sound", 11),
+        ])
+        await self.manager.report_physical_device_healthy(
+            "input", 11, sample_rate=48_000, channels=1
+        )
+
+        changed = await self.manager.report_physical_device_failed(
+            "input", 7, RuntimeError("no callback")
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(11, self.manager.active_index("input"))
+        snapshot = self.manager.snapshot()["audio_devices"]["input"]
+        webcam = next(item for item in snapshot["devices"] if item["id"] == "mic-webcam")
+        self.assertFalse(webcam["healthy"])
+        self.assertTrue(snapshot["fallback_active"])
+        self.assertEqual("mic-intel", snapshot["active_id"])
+        self.assertEqual(
+            [{"id": "mic-webcam", "name": "S65VC Webcam"}],
+            snapshot["discarded_devices"],
+        )
+        self.assertEqual("failed", snapshot["runtime"]["status"])
+        saved = json.loads(self.preference_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            "mic-intel",
+            saved["last_working_audio_devices"]["input"]["stable_id"],
+        )
+
     async def test_unavailable_preference_warns_and_uses_the_current_default(self) -> None:
         await self.refresh_with([
             device("mic-default", "Integrated microphone", 7, default=True),
@@ -149,6 +182,36 @@ class AudioDeviceManagerPhysicalSelectionTests(unittest.IsolatedAsyncioTestCase)
         self.assertEqual("Integrated microphone", snapshot["active_name"])
         self.assertEqual(9, self.manager.active_index("input"))
         self.assertIn("fallback=Integrated microphone", captured.output[0])
+
+    async def test_failed_manual_preference_is_replaced_and_persisted(
+        self,
+    ) -> None:
+        await self.refresh_with([
+            device("mic-webcam", "S65VC Webcam", 7, default=True),
+            device("mic-realtek", "Realtek microphone", 11),
+        ])
+        await self.manager.set_physical_device("input", "mic-webcam")
+        await self.manager.report_physical_device_healthy(
+            "input", 11, sample_rate=48_000, channels=1
+        )
+
+        await self.manager.report_physical_device_failed(
+            "input", 7, RuntimeError("no callback")
+        )
+
+        snapshot = self.manager.snapshot()["audio_devices"]["input"]
+        self.assertEqual("mic-realtek", snapshot["selection"])
+        self.assertEqual("mic-realtek", snapshot["active_id"])
+        self.assertFalse(snapshot["fallback_active"])
+        self.assertEqual(
+            [{"id": "mic-webcam", "name": "S65VC Webcam"}],
+            snapshot["discarded_devices"],
+        )
+        saved = json.loads(self.preference_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            "mic-realtek",
+            saved["audio_devices"]["input"]["stable_id"],
+        )
 
     async def test_configured_voice_defaults_are_independent(self) -> None:
         preference_path = Path(self.temporary_directory.name) / "voice-defaults.json"

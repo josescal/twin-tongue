@@ -1,6 +1,6 @@
 """Blocking PCM audio playback using SoundDevice raw streams."""
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 import logging
 import time
 
@@ -31,6 +31,9 @@ class QueuedAudioOutput:
         dtype: str,
         frames_per_block: int,
         queue_capacity_blocks: int = 10,
+        played_observer: Callable[[bytes], None] | None = None,
+        exclusive: bool = False,
+        discontinuity_fade_ms: float = ANTI_CLICK_FADE_MS,
     ) -> None:
         if queue_capacity_blocks <= 0:
             raise ValueError("Queue capacity must be greater than zero.")
@@ -41,11 +44,15 @@ class QueuedAudioOutput:
         self.frames_per_block = frames_per_block
         self.block_bytes = calculate_block_bytes(frames_per_block, channels, dtype)
         self.queue_capacity_blocks = queue_capacity_blocks
+        self.played_observer = played_observer
+        self.exclusive = exclusive
         self._blocks = PcmBlockBuffer(queue_capacity_blocks, self.block_bytes)
         self._silence = bytes(self.block_bytes)
+        if discontinuity_fade_ms <= 0:
+            raise ValueError("Discontinuity fade must be greater than zero.")
         self._fade_frames = min(
             frames_per_block,
-            max(2, round(sample_rate * ANTI_CLICK_FADE_MS / 1000)),
+            max(2, round(sample_rate * discontinuity_fade_ms / 1000)),
         )
         self._last_frame = [0] * channels
         self._recovering_from_empty_buffer = False
@@ -86,10 +93,23 @@ class QueuedAudioOutput:
             channels=self.channels,
             dtype=self.dtype,
             blocksize=self.frames_per_block,
+            extra_settings=(
+                sd.WasapiSettings(exclusive=True)
+                if self.exclusive
+                else None
+            ),
             callback=self._output_callback,
         )
         try:
             self.stream.start()
+            logger.info(
+                "event=audio_output_stream_opened device_id=%s mode=%s "
+                "sample_rate_hz=%s channels=%s",
+                self.output_device,
+                "exclusive" if self.exclusive else "shared",
+                self.sample_rate,
+                self.channels,
+            )
         except Exception:
             self.stop()
             raise
@@ -126,6 +146,11 @@ class QueuedAudioOutput:
     def discard_pending_blocks(self) -> int:
         """Drop buffered audio, for example after an output-mode switch."""
         return self._blocks.clear()
+
+    def mark_discontinuity(self) -> None:
+        """Crossfade the next queued block after an intentional timeline jump."""
+        if self.played_blocks > 0:
+            self._discontinuity_pending = True
 
     def _enqueue(self, block: bytes) -> None:
         result = self._blocks.write(block)
@@ -169,11 +194,20 @@ class QueuedAudioOutput:
                 self._discontinuity_pending = False
             self._remember_last_frame(outdata)
             self.played_blocks += 1
-            return
-        outdata[:] = self._silence  # type: ignore[index]
-        self._fade_out(outdata)
-        self._recovering_from_empty_buffer = True
-        self.empty_buffer_events += 1
+        else:
+            outdata[:] = self._silence  # type: ignore[index]
+            self._fade_out(outdata)
+            self._recovering_from_empty_buffer = True
+            self.empty_buffer_events += 1
+        if self.played_observer is not None:
+            try:
+                # AEC3 requires the complete render timeline, including
+                # callbacks that physically emitted silence.
+                self.played_observer(bytes(outdata))  # type: ignore[arg-type]
+            except Exception:
+                logger.exception(
+                    "event=audio_played_observer_failed action=observer_ignored"
+                )
 
     def _fade_out(self, outdata: object) -> None:
         """Reach digital silence smoothly after the queued audio runs dry."""

@@ -2,12 +2,18 @@
 
 import argparse
 import logging
+import math
 from pathlib import Path
 
+import numpy as np
 import sounddevice as sd
 
 from audio.capture import record_audio
-from audio.pcm import calculate_block_frames
+from audio.pcm import (
+    RecordedAudio,
+    calculate_block_frames,
+    convert_int16_channels,
+)
 from audio.portaudio import (
     AudioDeviceError,
     format_device,
@@ -34,7 +40,60 @@ def parse_args(
     parser.add_argument("--channels", type=int, default=1)
     parser.add_argument("--dtype", default=audio_config["sample_format"])
     parser.add_argument("--frame-duration-ms", type=float, default=audio_config["frame_duration_ms"])
+    parser.add_argument(
+        "--downmix-to-mono",
+        action="store_true",
+        help=(
+            "Record stereo, then apply Twin Tongue's exact 2-to-1 channel "
+            "conversion before playback."
+        ),
+    )
     return parser.parse_args()
+
+
+def _pipeline_downmix(audio: RecordedAudio) -> RecordedAudio:
+    """Apply the same stereo-to-mono conversion used before WebRTC AEC3."""
+    if audio.dtype != "int16":
+        raise ValueError("--downmix-to-mono requires dtype int16.")
+    if audio.channels != 2:
+        raise ValueError("--downmix-to-mono requires --channels 2.")
+    return RecordedAudio(
+        blocks=tuple(
+            convert_int16_channels(block, 2, 1) for block in audio.blocks
+        ),
+        sample_rate=audio.sample_rate,
+        channels=1,
+        dtype=audio.dtype,
+        frames_per_block=audio.frames_per_block,
+        frame_count=audio.frame_count,
+    )
+
+
+def _log_int16_levels(audio: RecordedAudio, *, label: str) -> None:
+    """Report objective full-recording and per-channel levels."""
+    if audio.dtype != "int16" or not audio.blocks:
+        return
+    samples = np.frombuffer(b"".join(audio.blocks), dtype="<i2")
+    if samples.size == 0:
+        return
+    channels = samples.reshape(-1, audio.channels)
+    for channel_index in range(audio.channels):
+        channel = channels[:, channel_index].astype(np.float64)
+        rms = math.sqrt(float(np.mean(channel * channel)))
+        peak = float(np.max(np.abs(channel)))
+        logging.info(
+            "%s channel %s: RMS %.1f dBFS, peak %.1f dBFS",
+            label,
+            channel_index + 1,
+            _dbfs(rms),
+            _dbfs(peak),
+        )
+
+
+def _dbfs(amplitude: float) -> float:
+    if amplitude <= 0:
+        return -96.0
+    return max(-96.0, 20.0 * math.log10(amplitude / 32_768.0))
 
 
 def main() -> int:
@@ -45,10 +104,18 @@ def main() -> int:
         args = parse_args(config["audio"], config["pipelines"]["agent_to_remote"])
         input_identifier = resolve_device(args.input_device, "input")
         output_identifier = resolve_device(args.output_device, "output")
+        if args.downmix_to_mono and args.channels != 2:
+            raise ValueError("--downmix-to-mono requires --channels 2.")
+        playback_channels = 1 if args.downmix_to_mono else args.channels
         block_frames = calculate_block_frames(args.sample_rate, args.frame_duration_ms)
         validate_input_settings(input_identifier, args.sample_rate, args.channels, args.dtype)
         try:
-            validate_output_settings(output_identifier, args.sample_rate, args.channels, args.dtype)
+            validate_output_settings(
+                output_identifier,
+                args.sample_rate,
+                playback_channels,
+                args.dtype,
+            )
         except AudioDeviceError as error:
             raise AudioDeviceError(
                 f"{error} Resampling and format conversion are not implemented."
@@ -61,6 +128,12 @@ def main() -> int:
         logging.info("Format:        %s", args.dtype)
         logging.info("Duration:      %g seconds", args.duration)
         logging.info("Block size:    %s frames", block_frames)
+        logging.info(
+            "Playback mode: %s",
+            "pipeline stereo-to-mono downmix"
+            if args.downmix_to_mono
+            else "recorded channels unchanged",
+        )
 
         audio = record_audio(
             input_device=input_identifier,
@@ -70,7 +143,11 @@ def main() -> int:
             dtype=args.dtype,
             frame_duration_ms=args.frame_duration_ms,
         )
-        play_audio(audio, output_identifier)
+        _log_int16_levels(audio, label="Captured")
+        playback_audio = _pipeline_downmix(audio) if args.downmix_to_mono else audio
+        if args.downmix_to_mono:
+            _log_int16_levels(playback_audio, label="Downmixed mono")
+        play_audio(playback_audio, output_identifier)
     except KeyboardInterrupt:
         logging.warning("Audio diagnostic interrupted by the user.")
         return 130

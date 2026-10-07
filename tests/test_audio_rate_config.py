@@ -2,17 +2,117 @@
 
 from pathlib import Path
 import unittest
+import tomllib
+from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parents[1]
-from config import load_config
+from config import ConfigurationError, load_config
 
 
 class AudioRateConfigurationTests(unittest.TestCase):
+    def test_toml_uses_namespaced_schema_v2_without_legacy_sections(self) -> None:
+        with (ROOT / "config" / "default.toml").open("rb") as config_file:
+            raw = tomllib.load(config_file)
+
+        self.assertEqual(2, raw["schema_version"])
+        self.assertIn("runtime", raw["pipeline"])
+        self.assertIn("classic", raw["pipeline"])
+        self.assertIn("speech_to_speech", raw["pipeline"])
+        self.assertEqual(
+            "speech_to_speech",
+            raw["pipeline"]["runtime"]["remote_to_agent"]["type"],
+        )
+        self.assertEqual(
+            "speech_to_speech",
+            raw["pipeline"]["runtime"]["agent_to_remote"]["type"],
+        )
+        self.assertEqual(
+            "elevenlabs",
+            raw["pipeline"]["classic"]["remote_to_agent"]["stt"]["engine"],
+        )
+        self.assertEqual(
+            "openai_realtime",
+            raw["pipeline"]["speech_to_speech"]["remote_to_agent"]
+            ["translation"]["engine"],
+        )
+        for legacy in (
+            "pipelines",
+            "providers",
+            "stt",
+            "translation",
+            "tts",
+            "classic_pipeline",
+            "realtime_translation",
+            "logging",
+            "server",
+        ):
+            self.assertNotIn(legacy, raw)
+
+    def test_runtime_type_and_direction_override_are_resolved_from_file(self) -> None:
+        source = (ROOT / "config" / "default.toml").read_text(encoding="utf-8")
+        source = source.replace(
+            "[pipeline.runtime.agent_to_remote]\n"
+            "enabled = true\n"
+            'mode = "passthrough"\n'
+            'type = "speech_to_speech"',
+            "[pipeline.runtime.agent_to_remote]\n"
+            "enabled = true\n"
+            'mode = "passthrough"\n'
+            'type = "classic"',
+        )
+        source = source.replace(
+            "[pipeline.speech_to_speech.remote_to_agent.translation]\n"
+            'engine = "openai_realtime"',
+            "[pipeline.speech_to_speech.remote_to_agent.translation]\n"
+            'engine = "openai_realtime"\n\n'
+            "[pipeline.speech_to_speech.remote_to_agent.translation.openai_realtime]\n"
+            "playback_queue_capacity_blocks = 10\n\n"
+            "[pipeline.speech_to_speech.remote_to_agent.translation."
+            "openai_realtime.input_transcription]\n"
+            "enabled = false",
+        )
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            path.write_text(source, encoding="utf-8")
+            config = load_config(path)
+
+        self.assertEqual(
+            "openai_realtime", config["pipelines"]["remote_to_agent"]["engine"]
+        )
+        self.assertEqual("classic", config["pipelines"]["agent_to_remote"]["engine"])
+        self.assertEqual(
+            10,
+            config["realtime_translation"]["directions"]["remote_to_agent"]
+            ["playback_queue_capacity_blocks"],
+        )
+        self.assertEqual(
+            12,
+            config["realtime_translation"]["directions"]["agent_to_remote"]
+            ["playback_queue_capacity_blocks"],
+        )
+        self.assertEqual(
+            {
+                "enabled": False,
+                "model": "gpt-realtime-whisper",
+            },
+            config["realtime_translation"]["directions"]["remote_to_agent"]
+            ["input_transcription"],
+        )
+
     def test_default_rates_are_explicit_and_consistent(self) -> None:
         config = load_config(ROOT / "config" / "default.toml")
 
         self.assertNotIn("languages", config)
         self.assertEqual(config["audio"]["processing_sample_rate"], 16_000)
+        self.assertFalse(config["audio"]["physical_capture_exclusive_mode"])
+        self.assertEqual(
+            {
+                "enabled": True,
+                "stream_delay_ms": 0,
+                "render_queue_capacity_blocks": 100,
+            },
+            config["audio"]["aec3"],
+        )
         self.assertEqual(config["stt"]["sample_rate"], 16_000)
         self.assertEqual(config["stt"]["audio_format"], "pcm_16000")
         self.assertTrue(config["stt"]["include_timestamps"])
@@ -39,6 +139,126 @@ class AudioRateConfigurationTests(unittest.TestCase):
         self.assertEqual(
             "male", config["pipelines"]["agent_to_remote"]["voice_gender"]
         )
+        self.assertEqual(
+            "openai_realtime", config["pipelines"]["remote_to_agent"]["engine"]
+        )
+        self.assertEqual(
+            "openai_realtime", config["pipelines"]["agent_to_remote"]["engine"]
+        )
+        self.assertEqual(
+            24_000, config["realtime_translation"]["openai"]["sample_rate"]
+        )
+        self.assertEqual(
+            "gpt-realtime-translate",
+            config["realtime_translation"]["openai"]["model"],
+        )
+        self.assertEqual(
+            200,
+            config["realtime_translation"]["openai"]["send_chunk_duration_ms"],
+        )
+        self.assertEqual(
+            25,
+            config["realtime_translation"]["openai"]["input_queue_capacity_blocks"],
+        )
+        self.assertEqual(
+            3,
+            config["realtime_translation"]["openai"]["send_queue_capacity_frames"],
+        )
+        self.assertEqual(
+            150,
+            config["realtime_translation"]["openai"][
+                "received_queue_capacity_blocks"
+            ],
+        )
+        self.assertEqual(
+            12,
+            config["realtime_translation"]["openai"]["playback_queue_capacity_blocks"],
+        )
+        adaptive = config["realtime_translation"]["openai"]["adaptive_playout"]
+        self.assertTrue(adaptive["enabled"])
+        self.assertEqual(1000.0, adaptive["target_backlog_ms"])
+        self.assertEqual(2800.0, adaptive["emergency_backlog_ms"])
+        self.assertEqual(1.15, adaptive["maximum_speed"])
+        self.assertFalse(
+            config["realtime_translation"]["openai"]["log_transcript_deltas"]
+        )
+        self.assertEqual(
+            {
+                "enabled": True,
+                "model": "gpt-realtime-whisper",
+            },
+            config["realtime_translation"]["openai"]["input_transcription"],
+        )
+        self.assertEqual(
+            {
+                "enabled": False,
+                "directory": "logs/realtime-audio",
+                "max_seconds_per_file": 120.0,
+                "tracks": ["captured", "played"],
+                "write_timing_marks": False,
+                "queue_capacity_blocks": 500,
+                "write_buffer_kb": 64,
+                "flush_interval_seconds": 1.0,
+            },
+            config["realtime_translation"]["openai"]["audio_capture"],
+        )
+        self.assertEqual(
+            150,
+            config["realtime_translation"]["openai"][
+                "transcript_ui_update_interval_ms"
+            ],
+        )
+        self.assertEqual(
+            1500,
+            config["realtime_translation"]["openai"][
+                "transcript_segment_idle_ms"
+            ],
+        )
+        self.assertEqual(
+            5000,
+            config["realtime_translation"]["openai"][
+                "transcript_alignment_wait_ms"
+            ],
+        )
+        self.assertEqual(
+            3000,
+            config["realtime_translation"]["openai"][
+                "provider_delay_warning_ms"
+            ],
+        )
+        self.assertEqual(
+            1500,
+            config["realtime_translation"]["openai"][
+                "provider_delay_recovery_ms"
+            ],
+        )
+        self.assertEqual(
+            0.0,
+            config["realtime_translation"]["directions"]["remote_to_agent"][
+                "output_gain_db"
+            ],
+        )
+        self.assertEqual(
+            6.0,
+            config["realtime_translation"]["directions"]["agent_to_remote"][
+                "output_gain_db"
+            ],
+        )
+        self.assertEqual(
+            {
+                "poll_interval_seconds": 1.0,
+                "failure_grace_seconds": 5.0,
+            },
+            config["audio"]["virtual_cables"]["session_monitor"],
+        )
+        self.assertEqual(
+            {
+                "enabled": True,
+                "prewarm_session": True,
+                "disconnect_grace_seconds": 5.0,
+            },
+            config["realtime_translation"]["openai"]["session_gate"],
+        )
         for language in ("ca", "en", "es", "fr"):
             voices = config["tts"]["language_voices"][language]
             self.assertEqual({"male", "female"}, set(voices))
@@ -57,7 +277,7 @@ class AudioRateConfigurationTests(unittest.TestCase):
         )
         self.assertEqual(
             config["pipelines"]["agent_to_remote"]["input_channels"],
-            1,
+            2,
         )
         self.assertEqual(
             config["pipelines"]["remote_to_agent"]["output_sample_rate"],
@@ -66,10 +286,6 @@ class AudioRateConfigurationTests(unittest.TestCase):
         self.assertEqual(
             config["pipelines"]["agent_to_remote"]["output_sample_rate"],
             48_000,
-        )
-        self.assertEqual(
-            {"enabled": False, "resume_delay_ms": 300},
-            config["pipelines"]["agent_to_remote"]["barge_in"],
         )
         expected_latency_protection = {
             "enabled": True,
@@ -98,13 +314,56 @@ class AudioRateConfigurationTests(unittest.TestCase):
             "partial_boundary_stability_ms": 350,
         }
         self.assertEqual(
-            config["pipelines"]["remote_to_agent"]["segmentation"],
+            config["pipelines"]["remote_to_agent"]["classic"]["segmentation"],
             expected_remote_segmentation,
         )
         self.assertEqual(
-            config["pipelines"]["agent_to_remote"]["segmentation"],
+            config["pipelines"]["agent_to_remote"]["classic"]["segmentation"],
             expected_agent_segmentation,
         )
+        self.assertNotIn("voice_detection", config)
+        self.assertEqual(
+            "silero", config["classic_pipeline"]["voice_detection"]["backend"]
+        )
+
+    def test_realtime_provider_frame_duration_must_be_two_hundred_ms(self) -> None:
+        source = (ROOT / "config" / "default.toml").read_text(encoding="utf-8")
+        source = source.replace(
+            "send_chunk_duration_ms = 200",
+            "send_chunk_duration_ms = 40",
+        )
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                r"send_chunk_duration_ms must be 200",
+            ):
+                load_config(path)
+
+    def test_realtime_session_prewarming_is_enabled(self) -> None:
+        config = load_config(ROOT / "config" / "default.toml")
+
+        self.assertTrue(
+            config["realtime_translation"]["openai"]["session_gate"][
+                "prewarm_session"
+            ]
+        )
+
+    def test_realtime_diagnostic_tracks_must_be_known_and_unique(self) -> None:
+        source = (ROOT / "config" / "default.toml").read_text(encoding="utf-8")
+        source = source.replace(
+            'tracks = ["captured", "played"]',
+            'tracks = ["captured", "unknown", "captured"]',
+        )
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                r"audio_capture\.tracks must be a non-empty list",
+            ):
+                load_config(path)
 
 
 if __name__ == "__main__":

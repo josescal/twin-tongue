@@ -2,7 +2,17 @@
 
 This guide helps a support technician install and validate the two virtual audio routes used by Twin Tongue on Windows.
 
+After routing passes, use the [Realtime support runbook](support-runbook.md) for
+application incidents. Queue pressure and callback health are explained in the
+[CSV metrics reference](metrics-reference.md).
+
 ## Routing model
+
+See [Audio device and routing architecture](audio-routing-architecture.md) for
+the complete diagram, the exact CABLE B connection to the calling application,
+and the `captured` → WebRTC AEC3 → `accepted` → `sent` → `received` → `played`
+diagnostic
+stages.
 
 Each virtual cable has a playback endpoint named `Input` and a recording endpoint named `Output`:
 
@@ -88,6 +98,18 @@ Then configure the calling application for normal Twin Tongue operation:
 
 Twin Tongue captures `CABLE-A Output`, captures the physical communications microphone, plays remote translations to the physical communications output, and sends agent translations to `CABLE-B Input`.
 
+Twin Tongue also monitors active Windows application sessions on these routes.
+For Realtime translation:
+
+- `remote_to_agent` opens its API session only when a call application renders
+  audio to CABLE A;
+- `agent_to_remote` opens its API session only when a call application captures
+  audio from CABLE B.
+
+The control panel should list the calling application under both cable
+connections. If it does not, translation remains armed but shows that it is
+waiting for a call application and consumes no OpenAI session.
+
 ## Troubleshooting
 
 ### CABLE endpoints are missing
@@ -115,6 +137,23 @@ Twin Tongue captures `CABLE-A Output`, captures the physical communications micr
 - Disable all Windows Listen bridges after validation.
 - Make sure the calling application is not also using the physical microphone or headphones directly.
 - Check that CABLE A and CABLE B have not been reversed.
+- During testing, the calling application or Windows may monitor the same
+  microphone through another route. A duplicate line in the control panel is
+  not itself proof that Twin Tongue sent audio twice; verify the physical
+  routes first.
+
+### Translation is armed but no audio or transcript appears
+
+- Confirm the call application is listed on the relevant cable in the control
+  panel.
+- Wait for the direction to report `Ready`; while it is initializing,
+  reconnecting, unavailable, or waiting for a call, original audio is used.
+- Confirm `OPENAI_API_KEY` is present when the configured type is
+  `speech_to_speech`.
+- Check `logs/twin-tongue.log` for connection, timeout, retry-cycle, or audio
+  queue events.
+- Changing languages closes the old directional session and opens a new one for
+  the new target language; a short return to passthrough is expected.
 
 ## Support checklist
 
@@ -126,3 +165,4 @@ Twin Tongue captures `CABLE-A Output`, captures the physical communications micr
 - [ ] The CABLE A no-code test reaches the headphones.
 - [ ] All temporary Windows Listen bridges are disabled afterward.
 - [ ] Headphones are used to prevent feedback.
+- [ ] The calling application appears under both cable connections in the panel.

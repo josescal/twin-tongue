@@ -1,40 +1,11 @@
 import unittest
+from unittest.mock import Mock, patch
 
-from app_state import ApplicationState, PipelineMode, VoiceGender
+from app_state import ApplicationState, PipelineMode, TranslationEngine, VoiceGender
 from twin_tongue_version import __version__
 
 
 class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
-    def test_disabled_barge_in_suppresses_only_the_opposite_capture_with_tail(self) -> None:
-        state = ApplicationState(
-            barge_in_enabled=False,
-            barge_in_resume_delay_ms=300,
-        )
-
-        state.note_translated_playback(
-            "remote_to_agent", buffered_audio_ms=100, now=10.0
-        )
-
-        self.assertTrue(
-            state.is_capture_suppressed_by_barge_in("agent_to_remote", now=10.39)
-        )
-        self.assertFalse(
-            state.is_capture_suppressed_by_barge_in("agent_to_remote", now=10.40)
-        )
-        self.assertFalse(
-            state.is_capture_suppressed_by_barge_in("remote_to_agent", now=10.1)
-        )
-
-    def test_enabled_barge_in_never_suppresses_opposite_capture(self) -> None:
-        state = ApplicationState(barge_in_enabled=True)
-        state.note_translated_playback(
-            "remote_to_agent", buffered_audio_ms=1_000, now=10.0
-        )
-
-        self.assertFalse(
-            state.is_capture_suppressed_by_barge_in("agent_to_remote", now=10.1)
-        )
-
     async def test_snapshot_exposes_application_version(self) -> None:
         self.assertEqual(__version__, ApplicationState().snapshot()["application_version"])
 
@@ -52,6 +23,48 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(state.is_audio_recording_active_for("agent_to_remote"))
         self.assertFalse(state.is_audio_recording_active_for("remote_to_agent"))
+
+    async def test_realtime_recording_is_manual_not_automatic(self) -> None:
+        state = ApplicationState(
+            audio_recording_enabled=True,
+            initial_engines={
+                "remote_to_agent": "openai_realtime",
+                "agent_to_remote": "openai_realtime",
+            },
+        )
+        await state.set_mode("remote_to_agent", "translate")
+
+        await state.set_pipeline_status("remote_to_agent", "translation_ready")
+        self.assertFalse(state.is_audio_recording_active_for("remote_to_agent"))
+
+        recording = await state.set_manual_audio_recording(True)
+
+        self.assertTrue(recording["audio_recording"]["active"])
+        self.assertEqual([], recording["audio_recording"]["automatic_pipelines"])
+        self.assertTrue(state.is_audio_recording_active_for("remote_to_agent"))
+
+    async def test_snapshot_exposes_requested_and_effective_modes(self) -> None:
+        state = ApplicationState(
+            active_pipelines=("remote_to_agent",),
+            initial_modes={"remote_to_agent": "translate"},
+            initial_engines={"remote_to_agent": "openai_realtime"},
+        )
+
+        unavailable = await state.set_pipeline_status(
+            "remote_to_agent", "translation_unavailable"
+        )
+        ready = await state.set_pipeline_status(
+            "remote_to_agent", "translation_ready"
+        )
+
+        self.assertEqual(
+            "passthrough",
+            unavailable["pipelines"]["remote_to_agent"]["effective_mode"],
+        )
+        self.assertEqual(
+            "translate",
+            ready["pipelines"]["remote_to_agent"]["effective_mode"],
+        )
 
     async def test_manual_recording_covers_passthrough_without_persisting_mode(self) -> None:
         state = ApplicationState(audio_recording_enabled=True)
@@ -92,6 +105,20 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(0, snapshot["revision"])
 
+    async def test_translation_engine_is_initialized_from_configuration(self) -> None:
+        state = ApplicationState(
+            initial_engines={"agent_to_remote": "openai_realtime"}
+        )
+
+        self.assertEqual(
+            TranslationEngine.OPENAI_REALTIME,
+            state.get_engine("agent_to_remote"),
+        )
+        self.assertEqual(
+            TranslationEngine.CLASSIC,
+            state.get_engine("remote_to_agent"),
+        )
+
     async def test_all_modes_change_in_one_revision(self) -> None:
         state = ApplicationState()
 
@@ -119,6 +146,23 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
             "passthrough",
             snapshot["pipelines"]["remote_to_agent"]["status"],
         )
+
+    async def test_pipeline_can_wait_for_a_call_without_disabling_translation(
+        self,
+    ) -> None:
+        state = ApplicationState(
+            initial_modes={"remote_to_agent": "translate"},
+            initial_engines={"remote_to_agent": "openai_realtime"},
+        )
+
+        snapshot = await state.set_pipeline_status(
+            "remote_to_agent", "waiting_for_call"
+        )
+
+        pipeline = snapshot["pipelines"]["remote_to_agent"]
+        self.assertEqual("translate", pipeline["mode"])
+        self.assertEqual("passthrough", pipeline["status"])
+        self.assertTrue(pipeline["waiting_for_call"])
 
     async def test_invalid_pipeline_status_is_rejected(self) -> None:
         state = ApplicationState()
@@ -150,6 +194,58 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
             ["en", "es", "fr", "ca"],
             [item["code"] for item in snapshot["supported_languages"]],
         )
+
+    async def test_realtime_target_language_options_exclude_catalan(self) -> None:
+        state = ApplicationState(
+            initial_engines={"agent_to_remote": "openai_realtime"},
+            initial_languages={"agent": "ca", "remote": "en"},
+        )
+
+        snapshot = state.snapshot()
+
+        self.assertEqual(
+            ["en", "es", "fr", "ca"],
+            [
+                item["code"]
+                for item in snapshot["supported_languages_by_role"]["agent"]
+            ],
+        )
+        self.assertEqual(
+            ["en", "es", "fr"],
+            [
+                item["code"]
+                for item in snapshot["supported_languages_by_role"]["remote"]
+            ],
+        )
+        with self.assertRaisesRegex(ValueError, "OpenAI Realtime Translate"):
+            await state.set_language("remote", "ca")
+
+    async def test_realtime_recovers_unsupported_initial_target_language(self) -> None:
+        with self.assertLogs("app_state", level="WARNING") as captured:
+            state = ApplicationState(
+                initial_engines={"remote_to_agent": "openai_realtime"},
+                initial_languages={"agent": "ca", "remote": "en"},
+            )
+
+        self.assertEqual("es", state.get_language("agent"))
+        self.assertIn("event=unsupported_initial_target_language", captured.output[0])
+
+    async def test_device_preferences_persist_recovered_realtime_language(self) -> None:
+        state = ApplicationState(
+            initial_engines={"remote_to_agent": "openai_realtime"},
+        )
+        manager = Mock()
+        manager.voice_genders = {
+            "remote_to_agent": "male",
+            "agent_to_remote": "male",
+        }
+        manager.ui_language = "en"
+        manager.participant_languages = {"agent": "ca", "remote": "en"}
+
+        state.attach_device_manager(manager)
+
+        self.assertEqual("es", state.get_language("agent"))
+        manager.set_participant_language.assert_called_once_with("agent", "es")
 
     async def test_invalid_language_and_role_are_rejected(self) -> None:
         state = ApplicationState()
@@ -221,6 +317,7 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("complete", entry["translation_status"])
         self.assertEqual("es", entry["source_language"])
         self.assertEqual("en", entry["target_language"])
+        self.assertRegex(entry["timestamp"], r"^\d{2}:\d{2}:\d{2}$")
 
     async def test_untranslated_final_can_be_marked_unavailable(self) -> None:
         state = ApplicationState()
@@ -232,19 +329,156 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("unavailable", entry["translation_status"])
         self.assertIsNone(entry["translated_text"])
 
-    async def test_transcription_is_bounded_and_can_be_cleared(self) -> None:
+    async def test_realtime_transcript_is_updated_in_place_and_finalized(self) -> None:
         state = ApplicationState()
+
+        with patch(
+            "app_state._transcript_timestamp",
+            side_effect=["12:34:56", "12:35:10"],
+        ):
+            state.publish_realtime_transcript(
+                "remote_to_agent", 7, "Hello", "", "en", "es"
+            )
+            state.publish_realtime_transcript(
+                "remote_to_agent", 7, "Hello there", "Hola", "en", "es"
+            )
+
+        entries = state.snapshot()["transcription"]["entries"]
+        self.assertEqual(1, len(entries))
+        self.assertEqual("Hello there", entries[0]["source_text"])
+        self.assertEqual("Hola", entries[0]["translated_text"])
+        self.assertEqual("pending", entries[0]["translation_status"])
+        self.assertEqual("aligned", entries[0]["pair_status"])
+        self.assertEqual("12:34:56", entries[0]["timestamp"])
+
+        state.publish_realtime_transcript(
+            "remote_to_agent",
+            7,
+            "Hello there",
+            "Hola",
+            "en",
+            "es",
+            final=True,
+        )
+
+        entry = state.snapshot()["transcription"]["entries"][0]
+        self.assertEqual("complete", entry["translation_status"])
+
+    async def test_realtime_transcript_can_publish_translation_before_source(self) -> None:
+        state = ApplicationState()
+
+        state.publish_realtime_transcript(
+            "agent_to_remote", 3, "", "Hello", "es", "en"
+        )
+
+        entry = state.snapshot()["transcription"]["entries"][0]
+        self.assertEqual("", entry["source_text"])
+        self.assertEqual("Hello", entry["translated_text"])
+        self.assertEqual("pending", entry["translation_status"])
+        self.assertEqual("waiting_for_source", entry["pair_status"])
+
+        state.publish_realtime_transcript(
+            "agent_to_remote",
+            3,
+            "",
+            "Hello",
+            "es",
+            "en",
+            final=True,
+        )
+        entry = state.snapshot()["transcription"]["entries"][0]
+        self.assertEqual("translation_without_source", entry["pair_status"])
+
+    async def test_realtime_repeated_phrase_is_preserved_as_a_separate_turn(
+        self,
+    ) -> None:
+        state = ApplicationState()
+
+        for transcript_id in range(8, 12):
+            state.publish_realtime_transcript(
+                "remote_to_agent",
+                transcript_id,
+                "",
+                "¿Qué hora es?",
+                "en",
+                "es",
+                final=True,
+            )
+
+        entries = state.snapshot()["transcription"]["entries"]
+        self.assertEqual(4, len(entries))
+        self.assertEqual([8, 9, 10, 11], [entry["id"] for entry in entries])
+        self.assertEqual(
+            ["¿Qué hora es?"] * 4,
+            [entry["translated_text"] for entry in entries],
+        )
+
+    async def test_realtime_equal_captions_are_isolated_by_direction(
+        self,
+    ) -> None:
+        state = ApplicationState()
+
+        state.publish_realtime_transcript(
+            "remote_to_agent", 1, "", "Hello!", "es", "en", final=True
+        )
+        state.publish_realtime_transcript(
+            "agent_to_remote", 2, "", "Hello.", "es", "en", final=True
+        )
+
+        entries = state.snapshot()["transcription"]["entries"]
+        self.assertEqual(2, len(entries))
+
+    async def test_transcription_is_bounded_per_direction_and_can_be_cleared(
+        self,
+    ) -> None:
+        state = ApplicationState()
+        for transcript_id in range(5):
+            state.publish_transcript_final(
+                "remote_to_agent", transcript_id, f"Phrase {transcript_id}", "en", "es"
+            )
         for transcript_id in range(60):
             state.publish_transcript_final(
                 "agent_to_remote", transcript_id, f"Frase {transcript_id}", "es", "en"
             )
 
         entries = state.snapshot()["transcription"]["entries"]
-        self.assertEqual(50, len(entries))
-        self.assertEqual(10, entries[0]["id"])
+        remote_entries = [
+            entry for entry in entries if entry["pipeline"] == "remote_to_agent"
+        ]
+        agent_entries = [
+            entry for entry in entries if entry["pipeline"] == "agent_to_remote"
+        ]
+        self.assertEqual(55, len(entries))
+        self.assertEqual([0, 1, 2, 3, 4], [entry["id"] for entry in remote_entries])
+        self.assertEqual(50, len(agent_entries))
+        self.assertEqual(10, agent_entries[0]["id"])
 
         snapshot = await state.clear_transcription()
         self.assertEqual([], snapshot["transcription"]["entries"])
+
+    async def test_transcription_retains_fifty_entries_for_each_direction(
+        self,
+    ) -> None:
+        state = ApplicationState()
+        for transcript_id in range(60):
+            state.publish_transcript_final(
+                "remote_to_agent", transcript_id, f"Phrase {transcript_id}", "en", "es"
+            )
+            state.publish_transcript_final(
+                "agent_to_remote", transcript_id, f"Frase {transcript_id}", "es", "en"
+            )
+
+        entries = state.snapshot()["transcription"]["entries"]
+        self.assertEqual(100, len(entries))
+        for pipeline_name in ("remote_to_agent", "agent_to_remote"):
+            directional_entries = [
+                entry for entry in entries if entry["pipeline"] == pipeline_name
+            ]
+            self.assertEqual(50, len(directional_entries))
+            self.assertEqual(
+                list(range(10, 60)),
+                [entry["id"] for entry in directional_entries],
+            )
 
     async def test_same_transcript_id_is_isolated_between_directions(self) -> None:
         state = ApplicationState()

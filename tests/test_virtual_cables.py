@@ -6,7 +6,9 @@ from unittest.mock import patch
 from audio.device_manager import AudioDeviceManager
 from audio.virtual_cables import (
     VirtualCablePair,
+    application_session_active,
     discover_virtual_cables,
+    refresh_sessions,
 )
 from audio.windows_audio import CoreAudioEndpoint, CoreAudioSession
 
@@ -19,6 +21,8 @@ def cable(letter: str, capture: int, render: int) -> VirtualCablePair:
         render_index=render,
         capture_sessions=(CoreAudioSession(20, "Teams", "active"),),
         render_sessions=(CoreAudioSession(10, "Edge", "active"),),
+        capture_sessions_known=True,
+        render_sessions_known=True,
     )
 
 
@@ -74,6 +78,12 @@ class AudioDeviceManagerCableTests(unittest.IsolatedAsyncioTestCase):
             self.manager.snapshot()["virtual_cables"]["remote_input"]["applications"],
         )
 
+    async def test_application_presence_uses_the_route_facing_the_call_app(self) -> None:
+        self.assertTrue(self.manager.application_session_active("remote_input"))
+        self.assertTrue(
+            self.manager.application_session_active("translated_output")
+        )
+
     async def test_topology_refresh_preserves_the_latest_session_observation(self) -> None:
         with patch(
             "audio.device_manager.discover_audio_topology",
@@ -115,6 +125,27 @@ class VirtualCableDiscoveryTests(unittest.TestCase):
             {"capture-a", "render-a"},
             {call.args[0] for call in sessions.call_args_list},
         )
+        self.assertTrue(result[0].capture_sessions_known)
+        self.assertTrue(result[0].render_sessions_known)
+
+    def test_lightweight_refresh_preserves_sessions_when_query_fails(self) -> None:
+        existing = VirtualCablePair(
+            "cable:A",
+            "CABLE A",
+            31,
+            24,
+            render_sessions=(CoreAudioSession(10, "Teams", "active"),),
+            render_endpoint_id="render-a",
+            render_sessions_known=True,
+        )
+        with patch(
+            "audio.virtual_cables.query_audio_sessions",
+            side_effect=OSError("endpoint temporarily unavailable"),
+        ):
+            refreshed = refresh_sessions([existing])
+
+        self.assertIsNone(application_session_active(refreshed, "remote_input"))
+        self.assertEqual(existing.render_sessions, refreshed[0].render_sessions)
 
 
 if __name__ == "__main__":

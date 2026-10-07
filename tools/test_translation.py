@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from config import ConfigurationError, configure_logging, load_config
+from preferences import UserPreferences
 from providers.google_translate import GoogleTranslateBasicV2
 from providers.translate import TranslationError
 
@@ -86,8 +87,9 @@ def main() -> int:
         config = load_config(PROJECT_ROOT / "config" / "default.toml")
         translation_config = config["translation"]
         assert isinstance(translation_config, dict)
-        languages_config = config["languages"]
-        assert isinstance(languages_config, dict)
+        languages_config = UserPreferences(
+            PROJECT_ROOT / "config" / "preferences.json"
+        ).participant_languages
         args = parse_args(languages_config)
         api_key = load_api_key()
         asyncio.run(run_translation(args, translation_config, api_key))

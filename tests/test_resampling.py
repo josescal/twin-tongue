@@ -6,6 +6,7 @@ import unittest
 import numpy as np
 
 from audio.resampling import (
+    IdentityStreamingPcmInt16Resampler,
     SoxrStreamingFloatResampler,
     create_resampler,
     float32_to_pcm_int16le,
@@ -26,6 +27,39 @@ class PcmConversionTests(unittest.TestCase):
 
 
 class SoxrStreamingResamplerTests(unittest.TestCase):
+    def test_factory_bypasses_soxr_when_rates_match(self) -> None:
+        source = np.asarray(
+            [-32768, -12345, 0, 12345, 32767],
+            dtype="<i2",
+        ).tobytes()
+        resampler = create_resampler(
+            {"backend": "soxr", "quality": "HQ"},
+            48_000,
+            48_000,
+        )
+
+        output = resampler.process(source)
+
+        self.assertIsInstance(resampler, IdentityStreamingPcmInt16Resampler)
+        self.assertIs(output[0], source)
+        self.assertEqual(output, (source,))
+
+    def test_identity_bypass_keeps_fixed_block_framing_and_reset(self) -> None:
+        resampler = create_resampler(
+            {"backend": "soxr", "quality": "HQ"},
+            48_000,
+            48_000,
+            output_block_frames=2,
+        )
+
+        self.assertEqual(resampler.process(b"\x01\x00\x02\x00\x03\x00"), (
+            b"\x01\x00\x02\x00",
+        ))
+        resampler.reset()
+        self.assertEqual(resampler.process(b"\x04\x00", final=True), (
+            b"\x04\x00",
+        ))
+
     def test_48k_to_16k_is_continuous_across_arbitrary_blocks(self) -> None:
         time = np.arange(48_000, dtype=np.float32) / 48_000
         source = (0.5 * np.sin(2 * np.pi * 440 * time)).astype(np.float32)

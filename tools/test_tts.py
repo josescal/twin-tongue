@@ -11,6 +11,7 @@ import wave
 from dotenv import load_dotenv
 
 from config import ConfigurationError, configure_logging, load_config
+from preferences import UserPreferences
 from providers.elevenlabs_tts import ElevenLabsTTS
 from providers.tts import TTSError
 
@@ -143,9 +144,12 @@ def main() -> int:
         assert isinstance(pipelines, dict)
         remote_pipeline = pipelines["remote_to_agent"]
         assert isinstance(remote_pipeline, dict)
+        languages = UserPreferences(
+            PROJECT_ROOT / "config" / "preferences.json"
+        ).participant_languages
         args = parse_args(
             tts_config,
-            {"agent": "es"},
+            languages,
             str(remote_pipeline["voice_gender"]),
         )
         api_key, base_url = load_environment()
