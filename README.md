@@ -59,7 +59,9 @@ sessions, and passthrough fallback keep both paths responsive and isolated.
 - Independent bidirectional pipelines with isolated provider sessions and queues.
 - Runtime switching between `passthrough` and `translate` mode per direction.
 - Configuration-only selection between Classic and speech-to-speech pipelines per direction.
-- English, Spanish, French, and Catalan language selection.
+- English, Spanish, French, and Catalan language selection. Realtime filters
+  target-language choices to the output languages supported by OpenAI; Catalan
+  remains available to Classic and as a source in a one-way Realtime route.
 - Classic-only male/female translated voice selection through configured ElevenLabs voices.
 - Classic-only Silero VAD, adaptive segmentation, ElevenLabs Realtime STT,
   Google Cloud Translation Basic v2, and ElevenLabs streaming TTS.
@@ -83,9 +85,10 @@ sessions, and passthrough fallback keep both paths responsive and isolated.
 
 The control panel exposes both translation directions, participant languages,
 physical audio devices, passthrough or translation mode, selected pipeline,
-operational state, and applications connected to the virtual call routes. Voice
-and diagnostic-recording controls appear only when they apply to an active
-Classic direction.
+operational state, and applications connected to the virtual call routes. The
+male/female voice control appears only for Classic because Realtime dynamically
+adapts the source voice. Diagnostic recording can be started and stopped for
+either engine without restarting Twin Tongue.
 
 ![Twin Tongue control panel](docs/images/screenshot-control_panel.png)
 
@@ -199,10 +202,11 @@ With `--pipeline both` (the default), only directions whose
 `pipeline.runtime.<direction>.enabled` value is `true` are started. Explicitly
 requesting a disabled direction is a configuration error.
 
-For OpenAI Realtime, enabling translation arms the direction. The API session is
-opened only after Twin Tongue detects a call application on the corresponding
-VB-CABLE route. Until then the panel shows “waiting for a call application” and
-no audio is sent to OpenAI.
+For OpenAI Realtime, enabling translation prewarms the direction's API session.
+Until Twin Tongue detects a call application on the corresponding VB-CABLE
+route, the panel shows “waiting for a call application” and no audio—including
+silence—is sent to OpenAI. During an active call the stream is continuous and
+includes real silence; Realtime never uses the Classic VAD.
 
 ## VB-CABLE setup
 
@@ -260,7 +264,8 @@ daily `logs/metrics-YYYY-MM-DD.csv` files. They include the
 selected engine, queue pressure, discarded blocks and segments, callback gaps,
 output underflows, event-loop lag, recording drops, provider activity, playback
 latency, VAD, and segmentation counters. Realtime rows additionally include
-first-audio and trailing latency, backlog percentiles, adaptive playback speed,
+first-audio, aligned provider and trailing latency, backlog percentiles,
+adaptive playback speed, translated-output gain/clipping,
 time compression, signal levels, source-specific playback drops, errors,
 reconnections, and call-session gate state.
 
@@ -272,10 +277,15 @@ queue capacities, expected relationships and incident patterns.
 When `[pipeline.classic.defaults.stt.elevenlabs.audio_capture].enabled` is `true`,
 diagnostic audio is recorded automatically for each translated Classic direction.
 Writes are buffered and flushed once per second to reduce filesystem and antivirus
-overhead. The control panel also provides manual recording controls when at least
-one active direction is Classic. Realtime diagnostic capture writes distinct
-`captured`, `accepted`, `sent`, `received`, and `played` tracks with a per-call
-manifest.
+overhead. The control panel also provides a manual diagnostic-recording control.
+Realtime diagnostic capture is off by default to minimize CPU, filesystem, and
+antivirus load on slower hosts, but support can start or stop it during a call
+without restarting the process. `audio_capture.tracks` selects which evidence is
+written; the shipped selection is only `captured` and `played`. Those tracks
+compare the source endpoint with the final callback-confirmed output on one
+shared, silence-padded timeline suitable for importing into Audacity. The other
+available tracks are `accepted`, `sent`, and `received`. Per-block JSONL timing
+marks remain separately disabled by default.
 Generated audio, logs, metrics, and preferences are excluded from source control
 and distribution packages.
 

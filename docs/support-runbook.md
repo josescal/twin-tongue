@@ -41,15 +41,34 @@ The calling application must use `CABLE-A Input` as its speaker/output and
 | Control panel | Current requested/effective state, device selection, call detection. |
 | `twin-tongue.log` | Starts/stops, device changes, gate transitions, recovery, reconnects, failures. |
 | Daily metrics CSV | Queue pressure, callback health, latency, signal level, drops, reconnections. |
-| Realtime call manifest | Exact devices/formats, track names, timeline and AEC3/recovery counters for one call. |
-| `captured.wav` | Raw endpoint signal before canonical conversion/AEC3. |
-| `accepted.wav` | Canonical input accepted after microphone AEC3 processing. |
-| `sent.wav` | Exact 24 kHz mono PCM successfully sent to OpenAI. |
-| `received.wav` | Provider-returned translated PCM before local output conversion. |
-| `played.wav` | Audio actually emitted by the PortAudio callback, including recovery behavior. |
+| Realtime call manifest | When diagnostic capture is temporarily enabled: exact devices/formats, track names, timeline and AEC3/recovery counters for one call. |
+| `captured.wav` | Optional diagnostic: raw endpoint signal before canonical conversion/AEC3. |
+| `accepted.wav` | Optional diagnostic: canonical input accepted after microphone AEC3 processing. |
+| `sent.wav` | Optional diagnostic: exact 24 kHz mono PCM successfully sent to OpenAI. |
+| `received.wav` | Optional diagnostic: provider-returned translated PCM before local output conversion. |
+| `played.wav` | Optional diagnostic: audio actually emitted by the PortAudio callback, including recovery behavior. |
 
-The WAV tracks are diagnostic recordings and may contain personal data. Collect
-or share them only under the applicable retention and privacy policy.
+Realtime WAV/JSONL generation is disabled by default to minimize runtime and
+filesystem load. For a controlled reproduction:
+
+1. Confirm that call-audio retention is authorized.
+2. Open **Control → Diagnostic recording** and select **Start recording**.
+3. Reproduce the problem in the active call.
+4. Select **Stop recording** immediately afterward.
+5. Collect the new files under `logs/realtime-audio`.
+
+The default `audio_capture.tracks = ["captured", "played"]` is the smallest
+useful set for comparing what entered Twin Tongue with what it ultimately
+emitted. Both files share logical sample zero and retain leading silence, so
+import them together into Audacity without trimming or automatically aligning
+their first audible samples. Select additional tracks in TOML only when the
+suspected layer requires them.
+
+Starting or stopping does not restart translation. Stopping flushes and closes
+the selected WAV tracks. The default runtime capture does not produce per-block
+JSONL; enable `write_timing_marks` before launch only when exact chronology is
+required. The tracks may contain personal data; collect or share them only under
+the applicable retention and privacy policy.
 
 ## Symptom runbooks
 
@@ -57,9 +76,9 @@ or share them only under the applicable retention and privacy policy.
 
 1. Wait for the effective state or a visible failure; connecting can take longer
    than the UI request itself.
-2. Confirm the relevant call application is attached to CABLE A/B. With the
-   session gate enabled, translation may be armed while the provider session
-   legitimately waits for a call.
+2. Confirm the relevant call application is attached to CABLE A/B. With
+   prewarming enabled, the provider session should already be connected while
+   its audio gate legitimately waits for a call.
 3. Check whether `realtime_session_gate_observation` is `active`, `inactive`, or
    `unknown` and whether `realtime_session_gate_audio_allowed` is true.
 4. Correlate with session/reconnect events in the log.
@@ -86,12 +105,19 @@ or share them only under the applicable retention and privacy policy.
 
 ### Translation is smooth but too late
 
-Check `realtime_voice_latency_last_ms`, `realtime_voice_latency_average_ms`,
-`realtime_backlog_p95_ms`, time above target, current speed, and receive
-discontinuities. A rising backlog with speed at 1.15x means adaptive playout is
-already at the configured limit. Do not increase maximum speed beyond the
-validated range merely to hide provider/network bursts; it can reduce
-intelligibility.
+Start with `realtime_provider_output_transcript_lag_ms`,
+`realtime_provider_delayed`, and receive/playback backlog. If translated-caption
+lag is high while backlog stays low, the semantic provider stream is late and
+queue tuning will not solve it. If caption lag is low but
+`realtime_backlog_p95_ms` rises, inspect time above target, current speed and
+receive discontinuities. Do not use `realtime_provider_audio_lag_ms` as elapsed
+conversation latency: generated-audio `elapsed_ms` does not advance through
+ordinary silence.
+
+For the bot-facing direction, also check `realtime_output_gain_db` and
+`realtime_output_gain_clipped_samples`. The shipped +6 dB CABLE-B override is
+based on the 08:48 support call. Reduce it if clipping grows; do not increase it
+to compensate for a bot that deliberately ignores audio while speaking.
 
 ### No input or very low input
 

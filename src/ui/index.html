@@ -247,8 +247,9 @@
             <div class="recording-state">
               <span class="recording-dot" aria-hidden="true"></span>
               <div class="recording-copy">
-                <strong data-i18n="recordingTitle">Diagnostic recording</strong>
-                <span id="recording-status"></span>
+          <strong data-i18n="recordingTitle">Diagnostic recording</strong>
+          <span id="recording-status"></span>
+          <span data-i18n="recordingPrivacy">Captures call audio. Use only with authorization.</span>
               </div>
             </div>
             <button id="recording-button" class="recording-button" type="button"></button>
@@ -342,19 +343,19 @@
         callConnections: "Call connections", callSpeaker: "Call speaker", callMic: "Call microphone",
         transcriptionTitle: "Conversation transcription", transcriptionDescription: "Recognized and translated phrases from both sides of the conversation.", clear: "Clear",
         emptyTranscription: "Phrases will appear here when translation is active and either person starts speaking.",
-        recordingTitle: "Diagnostic recording", recordingReady: "Ready for a manual recording.", recordingAutomatic: "Recording automatically during an active translated call.", recordingManual: "Manual recording is active.", startRecording: "Start recording", stopRecording: "Stop recording", recordingFailed: "Could not change audio recording.",
+        recordingTitle: "Diagnostic recording", recordingReady: "Ready for a manual recording.", recordingAutomatic: "Recording automatically during an active translated call.", recordingManual: "Manual recording is active.", recordingPrivacy: "Captures call audio. Use only with authorization.", startRecording: "Start recording", stopRecording: "Stop recording", recordingFailed: "Could not change audio recording.",
         helpTitle: "How to use Twin Tongue", helpIntro: "The panel lets you decide which audio is translated during a call and verify what the tool understood when you speak.", version: "Version",
-        beforeStartTitle: "Before you start", beforeStart1: "Check that the panel says Connected.", beforeStart2: "Select your language and the other person's language.", beforeStart3: "Choose a male or female voice for translation.", beforeStart4: "Start the call and check that the application appears in both connections.",
+        beforeStartTitle: "Before you start", beforeStart1: "Check that the panel says Connected.", beforeStart2: "Select your language and the other person's language.", beforeStart3: "Classic lets you choose a male or female voice. Realtime adapts the source speaker's voice automatically.", beforeStart4: "Start the call and check that the application appears in both connections.",
         conversationControlTitle: "Conversation control", conversationControl1: "Audio you hear controls whether the other person reaches you translated or unchanged.", conversationControl2: "Audio the other person hears controls whether your voice reaches them translated or unchanged.", conversationControl3: "When you enable translation, wait until the panel says Ready.", conversationControl4: "If translation is not available, original audio remains active.",
         clarityTitle: "For better recognition", clarity1: "Speak clearly and keep a steady volume.", clarity2: "Use clear phrases and leave a short pause between ideas.", clarity3: "Avoid speaking over the other person when possible.", clarity4: "Reduce background noise and use headphones to avoid echo.",
         reviewTitle: "Review transcription", reviewText: "The Transcription tab shows what Twin Tongue understood and translated for both people. Use it to detect unclear words, repeat a phrase, or explain an idea differently.",
         noticeTitle: "Keep in mind", noticeText: "Transcription and translation can contain errors, especially with noise, names, strong accents, or very fast speech. Translation also takes a few seconds because the system must listen, interpret, translate, and play the phrase.",
         labels: { translate: "translated audio", passthrough: "untranslated audio" },
         savedDeviceUnavailable: "The saved device is unavailable:", discardedDevice: "The selected device is not responding and has been temporarily discarded:", usingFallbackDevice: "Using instead:", deviceNotResponding: "not responding",
-        statusLabels: { starting: "Preparing audio...", system_loading: "Loading system - original audio active", switching: "Applying change...", initializing: "Preparing translation...", reconnecting: "Reconnecting translation - original audio active", waiting_for_call: "Translation enabled — waiting for a call application", translation_unavailable: "Translation unavailable - original audio active", translation_ready: "Ready: you can start speaking", passthrough: "untranslated audio", error: "Audio setup error" },
+        statusLabels: { starting: "Preparing audio...", system_loading: "Loading system - original audio active", switching: "Applying change...", initializing: "Preparing translation...", reconnecting: "Reconnecting translation - original audio active", waiting_for_call: "Translation enabled — waiting for a call application", translation_unavailable: "Translation unavailable - original audio active", translation_ready: "Ready: you can start speaking", translation_delayed: "Translation delayed — wait before speaking again", passthrough: "untranslated audio", error: "Audio setup error" },
         languages: { en: "English", es: "Spanish", fr: "French", ca: "Catalan" },
         noDevice: "No audio device available", noAudioDevice: "No audio device is available", automaticDevice: "Automatic (Windows communications device)", defaultDevice: "default", savedDeviceSelection: "saved selection", cableUnavailable: "Cable unavailable", callApplicationDisconnected: "No call application connected", checkVbCable: "Check the VB-CABLE installation.", selectCableA: "Select CABLE A as the speaker in the call application.", selectCableB: "Select CABLE B as the microphone in the call application.", noConnectedApp: "No connected application", appConnected: "Application connected to this cable", processDisconnectedDetail: "The Twin Tongue process is disconnected. Audio, translation, and recording are stopped.", recordingDisconnected: "Recording stopped: process disconnected.",
-        audioNotStarted: "Audio not started", remoteSpeaker: "Other person", agentSpeaker: "You", remoteSaid: "Other person said", agentHears: "You hear", agentSaid: "You said", remoteHears: "Other person hears", paragraphMeta: "Paragraph", segmentsMeta: "segments", notTranslated: "It was not translated.", translating: "Translating...", clearFailed: "Could not clear transcription.", languageFailed: "Could not change the language.", uiLanguageFailed: "Could not change the interface language.", voiceFailed: "Could not change the voice.", deviceFailed: "Could not change the audio device.", modeFailed: "Could not change the mode.", translationFailedDetail: "Translation could not be prepared. Original audio remains active."
+        audioNotStarted: "Audio not started", remoteSpeaker: "Other person", agentSpeaker: "You", remoteSaid: "Other person said", agentHears: "You hear", agentSaid: "You said", remoteHears: "Other person hears", paragraphMeta: "Paragraph", segmentsMeta: "segments", notTranslated: "It was not translated.", translating: "Translating...", waitingForTranslation: "Waiting for translation...", waitingForSource: "Waiting for the original transcription...", translationWithoutSource: "Translation received without an associated original transcription.", clearFailed: "Could not clear transcription.", languageFailed: "Could not change the language.", uiLanguageFailed: "Could not change the interface language.", voiceFailed: "Could not change the voice.", deviceFailed: "Could not change the audio device.", modeFailed: "Could not change the mode.", translationFailedDetail: "Translation could not be prepared. Original audio remains active."
       },
       es: {
         eyebrow: "Panel de control", connecting: "Conectando...", connected: "Conectado", reconnecting: "Sin conexión",
@@ -366,19 +367,19 @@
         callConnections: "Conexiones de la llamada", callSpeaker: "Altavoz de la llamada", callMic: "Micrófono de la llamada",
         transcriptionTitle: "Transcripción de la conversación", transcriptionDescription: "Frases reconocidas y traducidas de los dos interlocutores.", clear: "Limpiar",
         emptyTranscription: "Las frases aparecerán aquí cuando la traducción esté activa y cualquiera de los dos empiece a hablar.",
-        recordingTitle: "Grabación de diagnóstico", recordingReady: "Lista para iniciar una grabación manual.", recordingAutomatic: "Grabando automáticamente durante una llamada traducida activa.", recordingManual: "La grabación manual está activa.", startRecording: "Iniciar grabación", stopRecording: "Detener grabación", recordingFailed: "No se pudo cambiar la grabación de audio.",
+        recordingTitle: "Grabación de diagnóstico", recordingReady: "Lista para iniciar una grabación manual.", recordingAutomatic: "Grabando automáticamente durante una llamada traducida activa.", recordingManual: "La grabación manual está activa.", recordingPrivacy: "Captura el audio de la llamada. Úsala solo con autorización.", startRecording: "Iniciar grabación", stopRecording: "Detener grabación", recordingFailed: "No se pudo cambiar la grabación de audio.",
         helpTitle: "Cómo usar Twin Tongue", helpIntro: "El panel te permite decidir qué audio se traduce durante una llamada y comprobar lo que la herramienta ha entendido cuando hablas.", version: "Versión",
-        beforeStartTitle: "Antes de empezar", beforeStart1: "Comprueba que el panel indique Conectado.", beforeStart2: "Selecciona tu idioma y el de la otra persona.", beforeStart3: "Elige voz de hombre o mujer para la traducción.", beforeStart4: "Inicia la llamada y comprueba que la aplicación aparezca en las dos conexiones.",
+        beforeStartTitle: "Antes de empezar", beforeStart1: "Comprueba que el panel indique Conectado.", beforeStart2: "Selecciona tu idioma y el de la otra persona.", beforeStart3: "Classic permite elegir voz de hombre o mujer. Realtime adapta automáticamente la voz del hablante original.", beforeStart4: "Inicia la llamada y comprueba que la aplicación aparezca en las dos conexiones.",
         conversationControlTitle: "Control de la conversación", conversationControl1: "Audio que escuchas tú controla si recibes a la otra persona traducida o sin cambios.", conversationControl2: "Audio que escucha la otra persona controla si tu voz llega traducida o sin cambios.", conversationControl3: "Cuando actives la traducción, espera hasta que el panel indique Listo.", conversationControl4: "Si la traducción no está disponible, el audio original permanece activo.",
         clarityTitle: "Para que te entienda mejor", clarity1: "Habla claro y con volumen estable.", clarity2: "Usa frases claras y deja una pequeña pausa entre ideas.", clarity3: "Evita hablar a la vez que la otra persona siempre que sea posible.", clarity4: "Reduce el ruido de fondo y usa auriculares para evitar eco.",
         reviewTitle: "Revisar la transcripción", reviewText: "La pestaña Transcripción muestra lo que Twin Tongue ha entendido y traducido para ambos interlocutores. Úsala para detectar palabras confusas, repetir una frase o explicar una idea de otra manera.",
         noticeTitle: "Ten en cuenta", noticeText: "La transcripción y la traducción pueden contener errores, especialmente con ruido, nombres propios, acentos marcados o habla muy rápida. La traducción también necesita unos segundos porque el sistema debe escuchar, interpretar, traducir y reproducir la frase.",
         labels: { translate: "el audio traducido", passthrough: "el audio sin traducir" },
         savedDeviceUnavailable: "El dispositivo guardado no está disponible:", discardedDevice: "El dispositivo seleccionado no responde y se ha descartado temporalmente:", usingFallbackDevice: "Se está usando:", deviceNotResponding: "no responde",
-        statusLabels: { starting: "Preparando el audio...", system_loading: "Cargando el sistema - audio original activo", switching: "Aplicando el cambio...", initializing: "Preparando la traducción...", reconnecting: "Reconectando la traducción - audio original activo", waiting_for_call: "Traducción activada — esperando una aplicación de llamada", translation_unavailable: "Traducción no disponible - audio original activo", translation_ready: "Listo: puedes empezar a hablar", passthrough: "el audio sin traducir", error: "Error al preparar el audio" },
+        statusLabels: { starting: "Preparando el audio...", system_loading: "Cargando el sistema - audio original activo", switching: "Aplicando el cambio...", initializing: "Preparando la traducción...", reconnecting: "Reconectando la traducción - audio original activo", waiting_for_call: "Traducción activada — esperando una aplicación de llamada", translation_unavailable: "Traducción no disponible - audio original activo", translation_ready: "Listo: puedes empezar a hablar", translation_delayed: "La traducción lleva retraso — espera antes de volver a hablar", passthrough: "el audio sin traducir", error: "Error al preparar el audio" },
         languages: { en: "Inglés", es: "Español", fr: "Francés", ca: "Catalán" },
         noDevice: "Ningún dispositivo disponible", noAudioDevice: "No hay ningún dispositivo de audio disponible", automaticDevice: "Automático (dispositivo de comunicaciones de Windows)", defaultDevice: "predeterminado", savedDeviceSelection: "selección guardada", cableUnavailable: "Cable no disponible", callApplicationDisconnected: "Ninguna aplicación de llamada conectada", checkVbCable: "Comprueba la instalación de VB-CABLE.", selectCableA: "Selecciona CABLE A como altavoz en la aplicación de llamada.", selectCableB: "Selecciona CABLE B como micrófono en la aplicación de llamada.", noConnectedApp: "Ninguna aplicación conectada", appConnected: "Aplicación conectada a este cable", processDisconnectedDetail: "El proceso de Twin Tongue está desconectado. El audio, la traducción y la grabación están detenidos.", recordingDisconnected: "Grabación detenida: proceso desconectado.",
-        audioNotStarted: "Audio no iniciado", remoteSpeaker: "Otra persona", agentSpeaker: "Tú", remoteSaid: "La otra persona ha dicho", agentHears: "Tú escuchas", agentSaid: "Has dicho", remoteHears: "La otra persona escucha", paragraphMeta: "Párrafo", segmentsMeta: "segmentos", notTranslated: "No llegó a traducirse.", translating: "Traduciendo...", clearFailed: "No se pudo limpiar la transcripción.", languageFailed: "No se pudo cambiar el idioma.", uiLanguageFailed: "No se pudo cambiar el idioma de la interfaz.", voiceFailed: "No se pudo cambiar la voz.", deviceFailed: "No se pudo cambiar el dispositivo de audio.", modeFailed: "No se pudo cambiar el modo.", translationFailedDetail: "No se pudo preparar la traducción. El audio original sigue activo."
+        audioNotStarted: "Audio no iniciado", remoteSpeaker: "Otra persona", agentSpeaker: "Tú", remoteSaid: "La otra persona ha dicho", agentHears: "Tú escuchas", agentSaid: "Has dicho", remoteHears: "La otra persona escucha", paragraphMeta: "Párrafo", segmentsMeta: "segmentos", notTranslated: "No llegó a traducirse.", translating: "Traduciendo...", waitingForTranslation: "Esperando traducción...", waitingForSource: "Esperando la transcripción original...", translationWithoutSource: "Traducción recibida sin una transcripción original asociada.", clearFailed: "No se pudo limpiar la transcripción.", languageFailed: "No se pudo cambiar el idioma.", uiLanguageFailed: "No se pudo cambiar el idioma de la interfaz.", voiceFailed: "No se pudo cambiar la voz.", deviceFailed: "No se pudo cambiar el dispositivo de audio.", modeFailed: "No se pudo cambiar el modo.", translationFailedDetail: "No se pudo preparar la traducción. El audio original sigue activo."
       }
     };
     let currentState = null;
@@ -466,8 +467,13 @@
       }
       for (const select of document.querySelectorAll("select[data-role]")) {
         const selectedValue = state.languages[select.dataset.role];
+        const supportedLanguages = (
+          state.supported_languages_by_role?.[select.dataset.role]
+          || state.supported_languages
+          || []
+        );
         select.replaceChildren();
-        for (const language of state.supported_languages) {
+        for (const language of supportedLanguages) {
           select.add(new Option(t("languages")[language.code] || language.label, language.code));
         }
         select.value = selectedValue;
@@ -547,7 +553,9 @@
         : automatic
           ? t("recordingAutomatic")
           : t("recordingReady");
-      button.hidden = automatic && !recording.manual;
+      // Keep the manual control available even when Classic is recording
+      // automatically, because it may also arm a mixed Realtime direction.
+      button.hidden = false;
       button.textContent = recording.manual ? t("stopRecording") : t("startRecording");
       button.dataset.active = String(!recording.manual);
       button.disabled = false;
@@ -559,7 +567,9 @@
         const routeName = field.dataset.cableRoute;
         const route = state.virtual_cables[routeName];
         const pipelineName = routeName === "remote_input" ? "remote_to_agent" : "agent_to_remote";
-        const translationActive = state.pipelines[pipelineName]?.status === "translation_ready";
+        const translationActive = ["translation_ready", "translation_delayed"].includes(
+          state.pipelines[pipelineName]?.status
+        );
         const applications = field.querySelector(".application-list");
         applications.replaceChildren();
         if (route.unavailable || (translationActive && !route.applications.length)) {
@@ -689,7 +699,24 @@
         targetLabel.textContent = `${t(remoteTurn ? "agentHears" : "remoteHears")} - ${t("languages")[paragraph.target_language] || paragraph.target_language}`;
         const targetText = document.createElement("p");
         targetText.className = "transcript-text";
-        if (paragraph.translation_status === "complete") {
+        let targetMeta = null;
+        if (paragraph.pair_status === "waiting_for_translation") {
+          targetText.textContent = t("waitingForTranslation");
+          targetText.classList.add("translation-pending");
+        } else if (paragraph.pair_status === "source_without_translation") {
+          targetText.textContent = t("notTranslated");
+          targetText.classList.add("translation-pending");
+        } else if (paragraph.pair_status === "waiting_for_source") {
+          targetText.textContent = paragraph.translated_text;
+          targetMeta = document.createElement("div");
+          targetMeta.className = "transcript-meta translation-pending";
+          targetMeta.textContent = t("waitingForSource");
+        } else if (paragraph.pair_status === "translation_without_source") {
+          targetText.textContent = paragraph.translated_text;
+          targetMeta = document.createElement("div");
+          targetMeta.className = "transcript-meta translation-pending";
+          targetMeta.textContent = t("translationWithoutSource");
+        } else if (paragraph.translation_status === "complete") {
           targetText.textContent = paragraph.translated_text;
         } else if (paragraph.translation_status === "unavailable") {
           targetText.textContent = t("notTranslated");
@@ -699,6 +726,7 @@
           targetText.classList.add("translation-pending");
         }
         translated.append(targetLabel, targetText);
+        if (targetMeta) translated.append(targetMeta);
         article.append(speaker);
         if (hasSourceText) article.append(source);
         article.append(translated);
@@ -713,6 +741,7 @@
       const softSegmentLimit = 5;
       const hardSegmentLimit = 8;
       for (const entry of entries) {
+        const entryPairStatus = transcriptPairStatus(entry);
         const previousSource = current?.sourceParts.at(-1) || "";
         const canExceedSoftLimit = current
           && current.count >= softSegmentLimit
@@ -723,6 +752,8 @@
           && current.target_language === entry.target_language
           && current.count < hardSegmentLimit
           && (current.count < softSegmentLimit || canExceedSoftLimit)
+          && current.pair_status === "aligned"
+          && entryPairStatus === "aligned"
           && current.translation_status !== "unavailable"
           && entry.translation_status !== "unavailable";
         if (!canAppend) {
@@ -733,6 +764,7 @@
             sourceParts: [],
             translatedParts: [],
             translation_status: "complete",
+            pair_status: entryPairStatus,
             timestamp: entry.timestamp || "",
             count: 0
           };
@@ -758,9 +790,25 @@
         source_text: paragraph.sourceParts.join("\n"),
         translated_text: paragraph.translatedParts.join("\n"),
         translation_status: paragraph.translation_status,
+        pair_status: paragraph.pair_status,
         timestamp: paragraph.timestamp,
         count: paragraph.count
       })).filter(paragraph => paragraph.source_text.trim() || paragraph.translated_text.trim());
+    }
+
+    function transcriptPairStatus(entry) {
+      if (entry.pair_status) return entry.pair_status;
+      const hasSource = Boolean(entry.source_text?.trim());
+      const hasTranslation = Boolean(entry.translated_text?.trim());
+      if (hasSource && hasTranslation) return "aligned";
+      if (hasSource) {
+        return entry.translation_status === "unavailable"
+          ? "source_without_translation"
+          : "waiting_for_translation";
+      }
+      return entry.translation_status === "complete"
+        ? "translation_without_source"
+        : "waiting_for_source";
     }
 
     function endsAtSentenceBoundary(text) {

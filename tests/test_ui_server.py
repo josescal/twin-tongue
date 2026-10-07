@@ -121,6 +121,12 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
             decoded_page,
         )
         self.assertIn("pipeline.waiting_for_call === true", decoded_page)
+        self.assertIn("translation_delayed", decoded_page)
+        self.assertIn("translation_without_source", decoded_page)
+        self.assertIn(
+            "Traducción recibida sin una transcripción original asociada.",
+            decoded_page,
+        )
         self.assertIn('class="settings-panel"', decoded_page)
         self.assertIn('id="all-translation-button"', decoded_page)
         self.assertNotIn('data-i18n="youHear"', decoded_page)
@@ -173,6 +179,15 @@ class LocalControlServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('id="audio-recording"', decoded_page)
         self.assertIn("Diagnostic recording", decoded_page)
         self.assertIn("setAudioRecording", decoded_page)
+        self.assertIn("state.supported_languages_by_role", decoded_page)
+        self.assertIn(
+            "Realtime adapts the source speaker's voice automatically",
+            decoded_page,
+        )
+        self.assertIn(
+            "Realtime adapta automáticamente la voz del hablante original",
+            decoded_page,
+        )
         self.assertIn("Start the call and check", decoded_page)
         self.assertIn("Inicia la llamada y comprueba", decoded_page)
         self.assertIn("Speak clearly and keep a steady volume", decoded_page)

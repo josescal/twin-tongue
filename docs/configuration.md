@@ -6,7 +6,8 @@ effect, and the recommendation derived from development and hardware testing.
 
 Changes to `type`, engine bindings, audio geometry, or provider settings require
 a Twin Tongue restart. `mode`, languages, voices and physical device preferences
-can be changed through the control panel where exposed.
+can be changed through the control panel where exposed. Realtime diagnostic WAV
+recording can also be started or stopped there without a restart.
 
 ## Configuration model
 
@@ -145,7 +146,7 @@ These settings live below:
 | `endpoint` | `wss://api.openai.com/v1/realtime/translations` | Translation WebSocket base endpoint. Keep the official endpoint; the model is added by the client. |
 | `model` | `"gpt-realtime-translate"` | Speech-to-speech translation model. Treat model changes as compatibility changes and revalidate protocol events, audio and latency. |
 | `sample_rate` | `24000` | Required provider-side PCM rate. Keep 24 kHz. |
-| `send_chunk_duration_ms` | `200` | Audio accumulated per provider append. It follows the provider recommendation and gives predictable framing. Smaller chunks increase event overhead; larger chunks add input latency. |
+| `send_chunk_duration_ms` | `200` | Audio accumulated per provider append. OpenAI consumes 200 ms translation frames and explicitly recommends this cadence; shorter appends are buffered by the service and only increase WebSocket overhead. |
 | `input_queue_capacity_blocks` | `25` | Capture-to-processing queue: 500 ms. This protects callbacks from short stalls without permitting long stale input. |
 | `send_queue_capacity_frames` | `3` | Network-send queue: 600 ms at 200 ms/frame. It absorbs brief WebSocket backpressure. A growing/full queue means the sender cannot keep up. |
 | `received_queue_capacity_blocks` | `150` | Provider-output receive queue: 3,000 ms. It absorbs burst delivery and gives adaptive playout room to recover. Do not reduce below the emergency threshold. |
@@ -158,7 +159,11 @@ These settings live below:
 | `metrics_interval_seconds` | `10.0` | Realtime CSV snapshot cadence. Ten seconds is suitable for support without periodic log noise. |
 | `log_transcript_deltas` | `false` | Writes every transcript fragment only at DEBUG when enabled. Keep false in support/production; it adds noise and may expose conversation text. It does not disable UI captions or counters. |
 | `transcript_ui_update_interval_ms` | `150` | Coalescing interval for UI caption updates. Lower values add browser/server churn; 150 ms remains responsive without coupling UI work to audio receipt. |
-| `transcript_segment_idle_ms` | `500` | Closes a displayed translation entry after no new delta. This affects presentation, not provider audio segmentation. |
+| `transcript_segment_idle_ms` | `1500` | Closes a displayed entry after both source and translation stop changing. The longer interval prevents a translated phrase from being split by normal provider pauses. |
+| `transcript_alignment_wait_ms` | `5000` | Maximum time a source-only or translation-only entry remains open for pairing by OpenAI `elapsed_ms`. After five seconds it closes with an explicit unpaired status instead of remaining indefinitely as “Translating”. |
+| `provider_delay_warning_ms` | `3000` | Marks the pipeline `translation_delayed` when the translated transcript is at least this far behind its aligned source frame. Audio `elapsed_ms` is deliberately excluded because its cursor measures generated output duration and grows across ordinary silence. |
+| `provider_delay_recovery_ms` | `1500` | Clears `translation_delayed` after lag falls below this value. Keep it below the warning threshold to avoid status flicker. |
+| `output_gain_db` | `0.0` | Gain applied after translated-audio resampling with saturating PCM16 arithmetic. Keep 0 dB unless the destination endpoint is measurably low. Allowed range: -12 to +12 dB. |
 
 ### Why there are two output queues
 
@@ -218,10 +223,11 @@ These keys live below `.audio_capture`.
 
 | Parameter | Default | Meaning and recommendation |
 | --- | ---: | --- |
-| `enabled` | `true` | Records `captured`, `accepted`, `sent`, `received`, and `played` diagnostic tracks during active translation. Disable where call-audio retention is not authorized. |
+| `enabled` | `false` | Starts Realtime recording automatically for the pipeline lifetime. Keep disabled for normal operation. Support can still start and stop an authorized WAV capture from the control panel without changing TOML or restarting Twin Tongue. |
 | `directory` | `"logs/realtime-audio"` | Local root for call directories, manifests, WAV and timing files. |
 | `max_seconds_per_file` | `120.0` | Rotates each track after two minutes so abnormal exits and investigations remain manageable. |
-| `write_timing_marks` | `true` | Writes JSONL timing metadata. Useful for queue/timeline analysis but creates additional sensitive diagnostic data. |
+| `tracks` | `["captured", "played"]` | WAV tracks to create. Values must be unique and chosen from `captured`, `accepted`, `sent`, `received`, and `played`. Keep only the evidence needed for the investigation to reduce CPU, disk and antivirus work. |
+| `write_timing_marks` | `false` | Writes per-block JSONL timing metadata when capture is enabled. Enable only when exact timeline analysis is required; it produces substantially more filesystem activity than WAV-only capture. |
 | `queue_capacity_blocks` | `500` | Per-writer asynchronous recording queue, about 10 s at 20 ms/block. When full, recording blocks are dropped rather than delaying live audio. |
 | `write_buffer_kb` | `64` | Buffered file-write size. Keep 64 KiB unless storage profiling shows a specific need. |
 | `flush_interval_seconds` | `1.0` | Flush/header-refresh cadence. One second balances crash readability and filesystem/antivirus overhead. |
@@ -234,13 +240,57 @@ The tracks mean:
 - `received`: translated PCM returned by OpenAI;
 - `played`: callback-confirmed output PCM.
 
+The default pair is intended for conversational latency analysis:
+
+```toml
+tracks = ["captured", "played"]
+```
+
+`captured` contains the original endpoint input. `played` contains the final
+signal delivered by Twin Tongue after provider translation, resampling, gain,
+adaptive playout and the hardware output queue. Confirm that the UI reports
+`translation_ready` during the reproduction; in passthrough or provider fallback,
+`played` intentionally contains the original signal instead.
+
+Every selected track in one recording session is opened against the same
+monotonic origin. Twin Tongue inserts leading digital silence up to each track's
+first observed block, so importing the WAVs together into Audacity preserves the
+software pipeline delay instead of moving both first sounds to time zero. Do not
+trim or remove that leading silence. The alignment represents Twin Tongue
+callback time with one audio-block granularity (20 ms by default); it does not
+include unknown acoustic, USB, driver or endpoint latency outside the process.
+All selected filenames also share the same call identifier and rotation index.
+
+The runtime button arms all active Realtime directions and records only while
+their corresponding call cable is active. Stopping closes and flushes every
+selected WAV immediately. `write_timing_marks` remains a startup configuration:
+with its default `false`, the button creates WAV and manifest evidence without
+per-block JSONL overhead.
+
+### Realtime languages and voices
+
+Twin Tongue validates the listener's language against the output languages
+supported by `gpt-realtime-translate`. With the languages currently exposed by
+the product, English, Spanish, and French are valid Realtime targets. Catalan is
+still valid for Classic and may be a Realtime source in a one-way route where it
+does not become the target language. If an incompatible saved target is found
+after changing engines, startup falls back to the role default and records
+`unsupported_initial_target_language`; an incompatible control-panel selection
+is rejected without changing the current language.
+
+Realtime Translate does not currently accept fixed voice or gender parameters.
+It dynamically follows the source speaker's general voice characteristics.
+Male/female selection therefore applies only to Classic/ElevenLabs and is hidden
+for Realtime.
+
 ### Session gate
 
 These keys live below `.session_gate`.
 
 | Parameter | Default | Meaning and recommendation |
 | --- | ---: | --- |
-| `enabled` | `true` | Opens/sends to OpenAI only while a relevant call application is detected. Keep enabled to avoid idle cost and unintended capture. |
+| `enabled` | `true` | Gates audio using the relevant call-application observation. Keep enabled to prevent unintended capture. |
+| `prewarm_session` | `true` | Opens and configures the WebSocket when translation is enabled, before a call is detected. No audio is sent while waiting. After a completed call the used session is closed and a fresh warm session is prepared. Disable only to defer connection setup until call detection. |
 | `disconnect_grace_seconds` | `5.0` | Requires continuous confirmed inactivity for five seconds before closing. This absorbs transient application state changes. Zero makes teardown immediate but can cause reconnect churn. |
 
 `remote_to_agent` watches applications rendering to CABLE-A Input.
@@ -253,6 +303,7 @@ These keys live below `.session_gate`.
 | `pipeline.speech_to_speech.defaults.translation.engine` | `"openai_realtime"` | Default speech-to-speech engine binding. |
 | `pipeline.speech_to_speech.remote_to_agent.translation.engine` | `"openai_realtime"` | Directional binding; keep equal to the implemented default engine. |
 | `pipeline.speech_to_speech.agent_to_remote.translation.engine` | `"openai_realtime"` | Directional binding; keep equal to the implemented default engine. |
+| `pipeline.speech_to_speech.agent_to_remote.translation.openai_realtime.output_gain_db` | `6.0` | Directional override for CABLE B. The 08:48 support call measured translated peaks about 9.5 dB below the bot track; +6 dB improves bot-side detection while retaining headroom. Check the clipping metric after changing it. |
 
 ## Observability
 

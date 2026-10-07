@@ -27,6 +27,11 @@ class CsvMetricsWriterTests(unittest.TestCase):
             "realtime_session_gate_observation",
             "realtime_session_gate_call_active",
             "realtime_session_gate_blocked_ms",
+            "realtime_provider_audio_lag_ms",
+            "realtime_provider_audio_lag_p95_ms",
+            "realtime_provider_delayed",
+            "realtime_output_gain_db",
+            "realtime_output_gain_clipped_samples",
         ):
             self.assertIn(field, METRIC_FIELDS)
 

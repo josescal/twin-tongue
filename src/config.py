@@ -354,6 +354,10 @@ REQUIRED_OPENAI_REALTIME_KEYS = (
     "log_transcript_deltas",
     "transcript_ui_update_interval_ms",
     "transcript_segment_idle_ms",
+    "transcript_alignment_wait_ms",
+    "provider_delay_warning_ms",
+    "provider_delay_recovery_ms",
+    "output_gain_db",
     "adaptive_playout",
     "input_transcription",
     "session_gate",
@@ -363,6 +367,10 @@ REQUIRED_REALTIME_AUDIO_CAPTURE_KEYS = (
     "enabled",
     "directory",
     "max_seconds_per_file",
+    "tracks",
+)
+REALTIME_AUDIO_CAPTURE_TRACKS = frozenset(
+    {"captured", "accepted", "sent", "received", "played"}
 )
 REQUIRED_TTS_KEYS = (
     "model",
@@ -1017,12 +1025,17 @@ def load_config(path: Path) -> dict[str, Any]:
             session_gate = openai_realtime["session_gate"]
             _require_keys(
                 session_gate,
-                ("enabled", "disconnect_grace_seconds"),
+                ("enabled", "prewarm_session", "disconnect_grace_seconds"),
                 f"{settings_path}.session_gate",
             )
             if not isinstance(session_gate["enabled"], bool):
                 raise ConfigurationError(
                     f"{settings_path}.session_gate.enabled must be a boolean."
+                )
+            if not isinstance(session_gate["prewarm_session"], bool):
+                raise ConfigurationError(
+                    f"{settings_path}.session_gate.prewarm_session must be "
+                    "a boolean."
                 )
             disconnect_grace = session_gate["disconnect_grace_seconds"]
             if (
@@ -1070,6 +1083,22 @@ def load_config(path: Path) -> dict[str, Any]:
                     f"{settings_path}.audio_capture.write_timing_marks "
                     "must be a boolean."
                 )
+            capture_tracks = audio_capture["tracks"]
+            if (
+                not isinstance(capture_tracks, list)
+                or not capture_tracks
+                or any(
+                    not isinstance(track, str)
+                    or track not in REALTIME_AUDIO_CAPTURE_TRACKS
+                    for track in capture_tracks
+                )
+                or len(set(capture_tracks)) != len(capture_tracks)
+            ):
+                allowed_tracks = ", ".join(sorted(REALTIME_AUDIO_CAPTURE_TRACKS))
+                raise ConfigurationError(
+                    f"{settings_path}.audio_capture.tracks must be a non-empty "
+                    f"list of unique track names chosen from: {allowed_tracks}."
+                )
             for key, default in (
                 ("queue_capacity_blocks", 500),
                 ("write_buffer_kb", 64),
@@ -1099,6 +1128,7 @@ def load_config(path: Path) -> dict[str, Any]:
             for key in (
                 "transcript_ui_update_interval_ms",
                 "transcript_segment_idle_ms",
+                "transcript_alignment_wait_ms",
             ):
                 value = openai_realtime[key]
                 if (
@@ -1109,6 +1139,34 @@ def load_config(path: Path) -> dict[str, Any]:
                     raise ConfigurationError(
                         f"{settings_path}.{key} must be greater than zero."
                     )
+            warning_delay = openai_realtime["provider_delay_warning_ms"]
+            recovery_delay = openai_realtime["provider_delay_recovery_ms"]
+            for key, value in (
+                ("provider_delay_warning_ms", warning_delay),
+                ("provider_delay_recovery_ms", recovery_delay),
+            ):
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or value < 0
+                ):
+                    raise ConfigurationError(
+                        f"{settings_path}.{key} must not be negative."
+                    )
+            if float(recovery_delay) >= float(warning_delay):
+                raise ConfigurationError(
+                    f"{settings_path} provider delay thresholds must satisfy "
+                    "recovery < warning."
+                )
+            output_gain_db = openai_realtime["output_gain_db"]
+            if (
+                not isinstance(output_gain_db, (int, float))
+                or isinstance(output_gain_db, bool)
+                or not -12.0 <= float(output_gain_db) <= 12.0
+            ):
+                raise ConfigurationError(
+                    f"{settings_path}.output_gain_db must be between -12 and 12."
+                )
     _require_keys(config["tts"], REQUIRED_TTS_KEYS, "tts")
     tts_rate = config["tts"]["sample_rate"]
     if (

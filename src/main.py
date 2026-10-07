@@ -183,16 +183,18 @@ async def run_application(args: argparse.Namespace) -> None:
             },
             initial_voice_genders=device_manager.voice_genders,
             initial_ui_language=device_manager.ui_language,
-            audio_recording_enabled=bool(audio_capture_settings["enabled"])
-            and any(
-                str(
-                    (
-                        remote_settings
-                        if name == "remote_to_agent"
-                        else agent_settings
-                    ).get("engine", "classic")
+            audio_recording_enabled=any(
+                (
+                    str(
+                        (
+                            remote_settings
+                            if name == "remote_to_agent"
+                            else agent_settings
+                        ).get("engine", "classic")
+                    )
+                    == "openai_realtime"
                 )
-                == "classic"
+                or bool(audio_capture_settings["enabled"])
                 for name in selected_names
             ),
             active_pipelines=selected_names,

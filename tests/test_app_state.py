@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from app_state import ApplicationState, PipelineMode, TranslationEngine, VoiceGender
 from twin_tongue_version import __version__
@@ -24,7 +24,7 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(state.is_audio_recording_active_for("agent_to_remote"))
         self.assertFalse(state.is_audio_recording_active_for("remote_to_agent"))
 
-    async def test_realtime_pipeline_never_claims_to_record_audio(self) -> None:
+    async def test_realtime_recording_is_manual_not_automatic(self) -> None:
         state = ApplicationState(
             audio_recording_enabled=True,
             initial_engines={
@@ -37,14 +37,11 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
         await state.set_pipeline_status("remote_to_agent", "translation_ready")
         self.assertFalse(state.is_audio_recording_active_for("remote_to_agent"))
 
-        waiting = await state.set_pipeline_status(
-            "remote_to_agent",
-            "waiting_for_call",
-        )
+        recording = await state.set_manual_audio_recording(True)
 
-        self.assertFalse(waiting["audio_recording"]["active"])
-        self.assertEqual([], waiting["audio_recording"]["automatic_pipelines"])
-        self.assertFalse(state.is_audio_recording_active_for("remote_to_agent"))
+        self.assertTrue(recording["audio_recording"]["active"])
+        self.assertEqual([], recording["audio_recording"]["automatic_pipelines"])
+        self.assertTrue(state.is_audio_recording_active_for("remote_to_agent"))
 
     async def test_snapshot_exposes_requested_and_effective_modes(self) -> None:
         state = ApplicationState(
@@ -198,6 +195,58 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
             [item["code"] for item in snapshot["supported_languages"]],
         )
 
+    async def test_realtime_target_language_options_exclude_catalan(self) -> None:
+        state = ApplicationState(
+            initial_engines={"agent_to_remote": "openai_realtime"},
+            initial_languages={"agent": "ca", "remote": "en"},
+        )
+
+        snapshot = state.snapshot()
+
+        self.assertEqual(
+            ["en", "es", "fr", "ca"],
+            [
+                item["code"]
+                for item in snapshot["supported_languages_by_role"]["agent"]
+            ],
+        )
+        self.assertEqual(
+            ["en", "es", "fr"],
+            [
+                item["code"]
+                for item in snapshot["supported_languages_by_role"]["remote"]
+            ],
+        )
+        with self.assertRaisesRegex(ValueError, "OpenAI Realtime Translate"):
+            await state.set_language("remote", "ca")
+
+    async def test_realtime_recovers_unsupported_initial_target_language(self) -> None:
+        with self.assertLogs("app_state", level="WARNING") as captured:
+            state = ApplicationState(
+                initial_engines={"remote_to_agent": "openai_realtime"},
+                initial_languages={"agent": "ca", "remote": "en"},
+            )
+
+        self.assertEqual("es", state.get_language("agent"))
+        self.assertIn("event=unsupported_initial_target_language", captured.output[0])
+
+    async def test_device_preferences_persist_recovered_realtime_language(self) -> None:
+        state = ApplicationState(
+            initial_engines={"remote_to_agent": "openai_realtime"},
+        )
+        manager = Mock()
+        manager.voice_genders = {
+            "remote_to_agent": "male",
+            "agent_to_remote": "male",
+        }
+        manager.ui_language = "en"
+        manager.participant_languages = {"agent": "ca", "remote": "en"}
+
+        state.attach_device_manager(manager)
+
+        self.assertEqual("es", state.get_language("agent"))
+        manager.set_participant_language.assert_called_once_with("agent", "es")
+
     async def test_invalid_language_and_role_are_rejected(self) -> None:
         state = ApplicationState()
 
@@ -299,6 +348,7 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("Hello there", entries[0]["source_text"])
         self.assertEqual("Hola", entries[0]["translated_text"])
         self.assertEqual("pending", entries[0]["translation_status"])
+        self.assertEqual("aligned", entries[0]["pair_status"])
         self.assertEqual("12:34:56", entries[0]["timestamp"])
 
         state.publish_realtime_transcript(
@@ -325,6 +375,19 @@ class ApplicationStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("", entry["source_text"])
         self.assertEqual("Hello", entry["translated_text"])
         self.assertEqual("pending", entry["translation_status"])
+        self.assertEqual("waiting_for_source", entry["pair_status"])
+
+        state.publish_realtime_transcript(
+            "agent_to_remote",
+            3,
+            "",
+            "Hello",
+            "es",
+            "en",
+            final=True,
+        )
+        entry = state.snapshot()["transcription"]["entries"][0]
+        self.assertEqual("translation_without_source", entry["pair_status"])
 
     async def test_realtime_repeated_phrase_is_preserved_as_a_separate_turn(
         self,

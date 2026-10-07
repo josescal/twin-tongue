@@ -1,9 +1,19 @@
 """Shared contracts for streaming speech-to-speech translation engines."""
 
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 import math
 
 import numpy as np
+
+
+@dataclass(frozen=True)
+class RealtimeTranscriptDelta:
+    """One append-only transcript fragment with provider stream alignment."""
+
+    text: str
+    elapsed_ms: int | None = None
+    provider_lag_ms: float | None = None
 
 
 @dataclass
@@ -17,6 +27,13 @@ class RealtimeTranslationStatistics:
     output_pcm_bytes: int = 0
     input_transcript_characters: int = 0
     output_transcript_characters: int = 0
+    input_transcript_lag_ms: float | None = None
+    output_transcript_lag_ms: float | None = None
+    output_audio_lag_ms: float | None = None
+    output_audio_maximum_lag_ms: float = 0.0
+    output_audio_lag_samples_ms: deque[float] = field(
+        default_factory=lambda: deque(maxlen=18_000)
+    )
     first_audio_latency_ms: float | None = None
     total_latency_ms: float | None = None
     input_level_sample_count: int = 0
@@ -40,6 +57,36 @@ class RealtimeTranslationStatistics:
         self.output_level_sample_count = 0
         self.output_level_square_sum = 0.0
         self.output_peak_amplitude = 0
+
+    def reset_provider_timing(self) -> None:
+        """Reset stream-relative timing measurements for a new connection."""
+        self.input_transcript_lag_ms = None
+        self.output_transcript_lag_ms = None
+        self.output_audio_lag_ms = None
+        self.output_audio_maximum_lag_ms = 0.0
+        self.output_audio_lag_samples_ms.clear()
+
+    def record_output_audio_lag(self, lag_ms: float) -> None:
+        """Record provider audio delay relative to its aligned source frame."""
+        normalized = max(0.0, lag_ms)
+        self.output_audio_lag_ms = normalized
+        self.output_audio_maximum_lag_ms = max(
+            self.output_audio_maximum_lag_ms,
+            normalized,
+        )
+        self.output_audio_lag_samples_ms.append(normalized)
+
+    def output_audio_lag_percentile(self, percentile: float) -> float | None:
+        if not self.output_audio_lag_samples_ms:
+            return None
+        ordered = sorted(self.output_audio_lag_samples_ms)
+        index = (len(ordered) - 1) * percentile
+        lower = math.floor(index)
+        upper = math.ceil(index)
+        if lower == upper:
+            return ordered[lower]
+        fraction = index - lower
+        return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
 
     def record_input_level(self, pcm16: bytes) -> None:
         self._record_level(pcm16, output=False)

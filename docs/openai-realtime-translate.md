@@ -20,26 +20,26 @@ Realtime without a process restart.
 
 ## Call-aware API sessions
 
-Enabling Realtime translation arms the selected direction but does not by itself
-open an OpenAI WebSocket. Twin Tongue monitors the external WASAPI application
-sessions attached to the relevant VB-CABLE endpoint:
+Enabling Realtime translation opens and configures a prewarmed OpenAI WebSocket.
+Twin Tongue still monitors the external WASAPI application sessions attached to
+the relevant VB-CABLE endpoint:
 
 - `remote_to_agent` watches applications rendering to CABLE-A Input;
 - `agent_to_remote` watches applications capturing from CABLE-B Output.
 
-The OpenAI session opens only while the corresponding application session is
-active. When no call application is attached, the pipeline reports
-`waiting_for_call`, keeps local passthrough available, and sends no audio to the
-API. Session discovery runs independently from the heavier PortAudio topology
-poll and does not write diagnostic audio or state to disk.
+When no call application is attached, the pipeline reports `waiting_for_call`,
+keeps local passthrough available, and sends no audio to the API. The connected
+session has no media timeline until the call gate opens. Session discovery runs
+independently from the heavier PortAudio topology poll and does not write
+diagnostic audio or state to disk.
 
 After a call has been detected, audio sending and the WebSocket remain active for
 the configured disconnect grace when the WASAPI session disappears. This absorbs
 the active/inactive transitions produced by calling applications during silence
 or device changes. If the application does not reappear before the grace expires,
-Twin Tongue stops sending audio and closes the session. A failed WASAPI
-observation retains the last known state only for the configured failure grace
-and then fails closed.
+Twin Tongue stops sending audio, closes the used session, and prepares a fresh
+idle session for the next call. A failed WASAPI observation retains the last
+known state only for the configured failure grace and then fails closed.
 
 OpenAI's official conversational-translation guidance says to keep participant tracks separate and use one translation session per direction. Twin Tongue therefore creates two independent sessions when both directions select `openai_realtime`:
 
@@ -68,6 +68,13 @@ The implementation follows the current official [Realtime translation guide](htt
 - do not use `response.create` for translation sessions;
 - on graceful source shutdown, send `session.close`, keep receiving output, and wait for `session.closed`.
 
+The service currently supports fixed target-language selection but not custom
+voice or gender parameters. It uses dynamic voice adaptation, so Twin Tongue
+keeps its male/female selector exclusive to the Classic ElevenLabs pipeline.
+The listener-language selector is filtered per direction: of the product's
+current languages, English, Spanish, and French are valid Realtime outputs;
+Catalan is rejected whenever it would become a Realtime target.
+
 Because the dedicated service performs continuous interpretation, the classic Silero VAD and adaptive segmenter are not instantiated by this engine. They remain unchanged and active only in the classic pipelines. Their TOML settings are deliberately namespaced under `pipeline.classic.<direction>.vad` and `pipeline.classic.<direction>.segmentation` so they cannot be mistaken for speech-to-speech settings.
 
 ## Configuration
@@ -91,10 +98,10 @@ pseudonymous identifier, not raw personal information.
 
 Realtime uses independent capture, network-send, provider-receive, and playback
 queues. Capture retains 25 application blocks of 20 ms (500 ms). The resampler
-accumulates them into the 200 ms frames recommended by OpenAI, and the
-network-send queue retains three provider frames (600 ms). Provider output is
-split back into 20 ms blocks; its receive queue retains 150 blocks (3,000 ms) and
-translated playback is limited to twelve blocks (240 ms).
+accumulates them into the 200 ms frames required and recommended by OpenAI, and
+the network-send queue retains three provider frames (600 ms). Provider output
+is split back into 20 ms blocks; its receive queue retains 150 blocks (3,000 ms)
+and translated playback is limited to twelve blocks (240 ms).
 Network writes and translated playback run in separate tasks, so neither
 WebSocket backpressure nor a slow physical output can block reception of audio,
 transcripts, or control events. Provider audio deltas are split into 20 ms
@@ -109,17 +116,32 @@ documented in [CSV metrics reference](metrics-reference.md). Configuration
 semantics and tuning recommendations are in
 [Configuration reference](configuration.md).
 
+Realtime diagnostic WAV generation remains off at startup. Support can activate
+it from **Control → Diagnostic recording** during a reproduction. The live
+control arms both active directions, writes only while the corresponding call
+cable is present, and closes the selected tracks when stopped. This does not
+require a process restart. `audio_capture.tracks` controls the cost and evidence
+set; the default writes only `captured` and `played`, not five concurrent streams.
+
 Capture is callback-driven: the pipeline sleeps until PortAudio supplies a block
 instead of polling every millisecond. Device reopening runs outside the asyncio
 event loop, and audio-level metrics sample one of every five blocks. When
-diagnostic capture is enabled, Realtime writes `captured`, `accepted`, `sent`,
-provider-returned `received`, and callback-confirmed `played` tracks plus a
-per-call JSON manifest. CABLE A is recorded even in passthrough. The
+diagnostic capture is enabled, Realtime can write any configured subset of
+`captured`, `accepted`, `sent`, provider-returned `received`, and
+callback-confirmed `played` tracks plus a per-call JSON manifest. CABLE A is
+recorded even in passthrough when `captured` is selected. The
 physical-output callback supplies the render
 reference to the shared WebRTC AEC3 processor; the microphone direction supplies
 the capture stream. Echo estimation, double-talk handling, and cancellation are
 performed by native WebRTC Audio Processing before audio is sent or passed
 through to CABLE B.
+
+All selected WAVs share a recording-session origin and filename call identifier.
+Leading silence places each first block at its observed callback offset from that
+origin. Consequently, `captured` and `played` can be imported at position zero in
+Audacity to compare the original input with the final emitted audio without
+manually shifting either track. This is a software callback timeline with
+20 ms default resolution, not a measurement of external hardware/acoustic delay.
 
 `OPENAI_API_KEY` is the credential consumed by the runtime.
 `OPENAI_API_KEY_NAME` is only an optional descriptive entry in the environment
@@ -140,14 +162,16 @@ an in-memory queue, coalesced, and published to the UI at most once per
 `transcript_ui_update_interval_ms` (150 ms by default). This work is separate
 from the WebSocket receiver so subtitle rendering cannot delay translated audio.
 
-Because translation sessions emit continuous deltas rather than Classic-style
-final segments, Twin Tongue closes a displayed entry after
-`transcript_segment_idle_ms` (500 ms by default) without new text. When source
-transcription is disabled or unavailable, translated text is still displayed
-without waiting for the missing source side. A source-only partial is retained
-for up to five times the normal interval to accommodate provider latency.
-Session shutdown, language changes, and reconnects also close the current entry.
-No transcript audio or delta is written to disk by this path.
+Translation events include OpenAI `elapsed_ms` stream-alignment metadata.
+Twin Tongue retains a source-only or translation-only entry for
+`transcript_alignment_wait_ms` (5 seconds by default), allowing a delayed
+counterpart to attach to the same displayed phrase. Once both sides exist, the
+entry closes after `transcript_segment_idle_ms` (1.5 seconds) without new text.
+If the counterpart does not arrive, the entry is finalized as “original without
+translation” or “translation without original”. The UI keeps such entries
+separate, so a late continuation cannot be appended to an older paragraph.
+Session shutdown, language changes, and reconnects also close the current
+entry. No transcript audio or delta is written to disk by this path.
 
 Twin Tongue preserves equal final phrases as separate turns. It does not deduplicate
 captions by normalized text or by a time window, because a caller may intentionally
@@ -163,8 +187,9 @@ metrics are enabled. `[observability.metrics].enabled` is `true` in the shipped
 configuration. CSV rows include backlog p50/p95/p99, adaptive speed and maximum
 speed, time-compression ratio, time above the target watermark, silence-boundary
 drops, and separate translated/passthrough playback-drop counters.
-Signal RMS and peaks, callback health, session-gate state, errors, and
-reconnections are stored in the same CSV. Periodic metric snapshots and
+Signal RMS and peaks, aligned provider lag, output gain/clipping, callback
+health, session-gate state, errors, and reconnections are stored in the same CSV.
+Periodic metric snapshots and
 per-utterance latency measurements are not duplicated in `twin-tongue.log`.
 The log retains call/session transitions, retries, unavailable states, buffer
 recovery warnings, device changes, and failures requiring support attention.
@@ -173,6 +198,8 @@ The main Realtime support events are intentionally small in number:
 
 - `realtime_call_state_changed`: the calling application became active or inactive;
 - `pipeline_status_changed`: the user-visible state changed;
+- `realtime_provider_delay_changed`: aligned output crossed or recovered from
+  the delayed threshold;
 - `realtime_translation_connection_failed` or `connection_lost`: a retry started;
 - `realtime_translation_retry_cycle_exhausted`: the cooldown started;
 - `realtime_session_close_timeout` or `close_failed`: graceful shutdown failed;
@@ -185,15 +212,15 @@ in the per-call manifest instead of occupying the normal support log.
 
 ## Failure and latency behavior
 
-Enabling translation arms the direction. The WebSocket is created only after the
-stabilized cable-session gate detects a call, then receives continuous source
-audio for that call. The disconnect grace keeps AEC3, diagnostics, and the
-session active across brief false-negative Windows observations. When it
-expires, Twin Tongue flushes the local 200 ms framing queue, sends
+Enabling translation prepares a media-idle WebSocket. The stabilized
+cable-session gate begins continuous source audio only after it detects a call.
+The disconnect grace keeps AEC3, diagnostics, and the session active across
+brief false-negative Windows observations. When it expires, Twin Tongue flushes
+the local 200 ms framing queue, sends
 `session.close`, drains remaining provider audio and transcripts through
-`session.closed`, waits for physical playback to empty, and starts the next call
-with a fresh session. During this exclusive `draining` state it does not inject
-passthrough audio into the same output.
+`session.closed`, waits for physical playback to empty, and prewarms a fresh
+session for the next call. During this exclusive `draining` state it does not
+inject passthrough audio into the same output.
 
 Provider audio is split into 20 ms blocks and held in a three-second receive
 buffer with 240 ms of physical playback capacity. Above one second of backlog,
@@ -217,6 +244,9 @@ Structured logs and CSV metrics expose:
 
 - latency from the first input audio sent to the first translated audio received;
 - trailing total latency from the latest input block to the latest output block;
+- aligned transcript and output-audio provider lag from `elapsed_ms`, including
+  p95 and maximum;
+- configured translated-output gain and clipped-sample count;
 - cumulative input and generated audio duration;
 - connection errors and successful reconnections;
 - capture drops and overflows;

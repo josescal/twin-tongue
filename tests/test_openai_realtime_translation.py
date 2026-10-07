@@ -9,6 +9,7 @@ from engines.openai_realtime import (
     RealtimeRateLimitCoordinator,
     is_realtime_rate_limit_error,
 )
+from engines.realtime_translation import RealtimeTranscriptDelta
 
 
 class FakeWebSocket:
@@ -45,8 +46,8 @@ class OpenAIRealtimeTranslationSessionTests(unittest.IsolatedAsyncioTestCase):
             return self.socket
 
         self.audio: list[bytes] = []
-        self.input_text: list[str] = []
-        self.output_text: list[str] = []
+        self.input_text: list[RealtimeTranscriptDelta] = []
+        self.output_text: list[RealtimeTranscriptDelta] = []
         self.session = OpenAIRealtimeTranslationSession(
             api_key="test-key",
             endpoint="wss://api.openai.test/v1/realtime/translations",
@@ -71,14 +72,27 @@ class OpenAIRealtimeTranslationSessionTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "type": "session.output_audio.delta",
                     "delta": base64.b64encode(b"\x03\x00").decode("ascii"),
+                    "elapsed_ms": 0,
                 }
             )
         )
         self.socket.incoming.put_nowait(
-            json.dumps({"type": "session.input_transcript.delta", "delta": "Hola"})
+            json.dumps(
+                {
+                    "type": "session.input_transcript.delta",
+                    "delta": "Hola",
+                    "elapsed_ms": 0,
+                }
+            )
         )
         self.socket.incoming.put_nowait(
-            json.dumps({"type": "session.output_transcript.delta", "delta": "Hello"})
+            json.dumps(
+                {
+                    "type": "session.output_transcript.delta",
+                    "delta": "Hello",
+                    "elapsed_ms": 0,
+                }
+            )
         )
         await asyncio.sleep(0)
 
@@ -112,8 +126,12 @@ class OpenAIRealtimeTranslationSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("session.input_audio_buffer.append", self.socket.sent[1]["type"])
         self.assertEqual("session.close", self.socket.sent[-1]["type"])
         self.assertEqual([b"\x03\x00"], self.audio)
-        self.assertEqual(["Hola"], self.input_text)
-        self.assertEqual(["Hello"], self.output_text)
+        self.assertEqual("Hola", self.input_text[0].text)
+        self.assertEqual(0, self.input_text[0].elapsed_ms)
+        self.assertIsNotNone(self.input_text[0].provider_lag_ms)
+        self.assertEqual("Hello", self.output_text[0].text)
+        self.assertEqual(0, self.output_text[0].elapsed_ms)
+        self.assertIsNotNone(self.output_text[0].provider_lag_ms)
         self.assertEqual(4, self.session.statistics.input_pcm_bytes)
         self.assertEqual(2, self.session.statistics.output_pcm_bytes)
         self.assertEqual(2, self.session.statistics.input_level_sample_count)
@@ -125,6 +143,11 @@ class OpenAIRealtimeTranslationSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(4, self.session.statistics.input_transcript_characters)
         self.assertEqual(5, self.session.statistics.output_transcript_characters)
         self.assertIsNotNone(self.session.statistics.first_audio_latency_ms)
+        self.assertIsNotNone(self.session.statistics.output_audio_lag_ms)
+        self.assertGreaterEqual(
+            self.session.statistics.output_audio_maximum_lag_ms,
+            0.0,
+        )
         self.assertTrue(self.socket.closed)
 
     async def test_connect_omits_optional_input_transcription_when_disabled(

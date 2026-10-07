@@ -81,7 +81,7 @@ drop and discontinuity counters make this intervention visible.
 | Symptom | Metrics to compare | Likely interpretation |
 | --- | --- | --- |
 | Choppy translated audio | `realtime_playback_empty_buffer_events`, `translated_output_underflows`, `realtime_playback_maximum_callback_gap_ms` | The output callback ran without translated audio, the driver reported an underflow, or callbacks stalled. |
-| Translation becomes increasingly late | `realtime_backlog_p95_ms`, `realtime_backlog_time_above_target_ms`, `realtime_adaptive_speed` | Provider output is arriving faster or more burstily than real-time playback can consume it. |
+| Translation becomes increasingly late | Compare `realtime_provider_output_transcript_lag_ms`, `realtime_provider_delayed`, and local backlog | High translated-caption lag with low local backlog points to provider/semantic delay. Rising local backlog with low caption lag means Twin Tongue cannot play returned audio fast enough. |
 | Words or phrases disappear | receive/playback dropped-block metrics and `realtime_received_queue_discontinuities` | A bounded queue overflowed or emergency backlog recovery intentionally skipped stale audio. |
 | Translation never starts | gate fields, `realtime_errors`, `realtime_reconnections` | No call application is attached, session detection is unknown, or the provider cannot establish a stable session. |
 | Captions move but audio is silent | output RMS/peak, playback empty events, `received` and `played` diagnostic WAVs | The provider returned no audio, local conversion failed, or playback starved. |
@@ -163,12 +163,35 @@ diagnose it.
 | `realtime_input_peak_amplitude` | Largest absolute sampled PCM16 input value (full scale is 32767). |
 | `realtime_output_rms_dbfs` | Sampled provider-output RMS in dBFS. Empty/very low values with growing input duration indicate no translated audio. |
 | `realtime_output_peak_amplitude` | Largest absolute sampled PCM16 provider-output value. |
+| `realtime_provider_input_transcript_lag_ms` | Arrival delay of the latest source transcript delta relative to its OpenAI `elapsed_ms` frame. |
+| `realtime_provider_output_transcript_lag_ms` | Arrival delay of the latest translated transcript delta relative to its aligned source frame. |
+| `realtime_provider_audio_lag_ms` | Diagnostic drift between wall time and the provider's generated-audio `elapsed_ms` cursor. This is **not** conversational latency: it grows during silence because generated output duration is not a continuous input timeline. It does not drive UI status. |
+| `realtime_provider_audio_lag_p95_ms` | 95th percentile of the diagnostic generated-audio cursor drift. Do not use it for support latency thresholds. |
+| `realtime_provider_audio_maximum_lag_ms` | Largest diagnostic generated-audio cursor drift in the current connection. Do not interpret it as seconds heard late. |
+| `realtime_provider_delayed` | Whether translated-transcript lag crossed the warning threshold and has not recovered below the lower threshold. Mirrors the `translation_delayed` UI state. |
+| `realtime_output_gain_db` | Configured translated-output gain. The shipped `agent_to_remote` value is +6 dB; `remote_to_agent` remains 0 dB. |
+| `realtime_output_gain_clipped_samples` | Cumulative samples limited to PCM16 full scale after gain. Zero is ideal; sustained growth means the gain should be reduced. |
 | `realtime_input_transcript_characters` | Cumulative source-caption characters received during the pipeline run. |
 | `realtime_output_transcript_characters` | Cumulative translated-caption characters received during the pipeline run. |
 | `realtime_voice_latency_completed_utterances` | Utterances for which accepted input speech was matched to callback-confirmed output speech. |
-| `realtime_voice_latency_pending_utterances` | Detected input utterances still waiting for played translated speech. Persistent growth means translation/playback is not completing. |
-| `realtime_voice_latency_last_ms` | Latest accepted-input speech start to translated speech actually played. This is the most useful end-to-end conversational latency value. |
-| `realtime_voice_latency_average_ms` | Average accepted-to-played speech latency for completed utterances. |
+| `realtime_voice_latency_pending_utterances` | Experimental FIFO onset pairings still waiting for played speech. Input and translated speech are not always one-to-one, so growth can also mean the heuristic lost alignment. |
+| `realtime_voice_latency_last_ms` | Experimental accepted-to-played onset pairing. Do not present it as end-to-end latency until turn correlation and stale-pair expiry are implemented. |
+| `realtime_voice_latency_average_ms` | Average of the experimental onset pairings, subject to the same correlation limitation. |
+
+Provider alignment lag and local backlog answer different questions:
+
+```mermaid
+flowchart LR
+    S["Source transcript elapsed_ms"] --> P["Translated transcript lag"]
+    P --> R["Returned audio arrives"]
+    R --> Q["Twin Tongue receive + playback backlog"]
+    Q --> H["CABLE B / headphones"]
+```
+
+`realtime_provider_output_transcript_lag_ms` is the reliable semantic/provider
+signal currently available; queue metrics measure `R -> H`. The audio cursor
+drift fields are retained for engineering diagnosis but must not be treated as
+`S -> R` latency.
 
 ## Realtime send and receive queue fields
 
@@ -226,7 +249,7 @@ drop; do not add all three as independent losses.
 | `realtime_session_gate_call_active` | Stabilized call state after grace/failure handling. |
 | `realtime_session_gate_activations` | Number of stabilized inactive-to-active transitions. |
 | `realtime_session_gate_deactivations` | Number of stabilized active-to-inactive transitions. |
-| `realtime_session_gate_blocked_ms` | Cumulative time the gate has prevented provider audio/session use. This is normal while no call is attached. |
+| `realtime_session_gate_blocked_ms` | Cumulative time the gate has prevented provider audio use. With prewarming enabled the WebSocket may already be connected; this counter is still normal while no call is attached. |
 | `realtime_errors` | Provider/session errors counted during the pipeline run. Correlate increases with `ERROR`/`WARNING` log events. |
 | `realtime_reconnections` | Reconnects counted during the pipeline run. Repeated increases indicate instability, quota pressure, or rate limiting. |
 
@@ -238,7 +261,8 @@ For a Realtime audio incident, preserve:
 2. `logs/twin-tongue.log` and its rotated predecessor if the incident crossed a
    rollover.
 3. The matching `logs/realtime-audio` call manifest.
-4. The five diagnostic tracks only when policy permits recording call audio.
+4. Only the configured diagnostic tracks required for the investigation and
+   permitted by call-audio policy.
 5. Direction, approximate local time, calling application, selected microphone
    and selected output device.
 

@@ -1,6 +1,7 @@
 """Common PCM data structures, block geometry, and channel conversion."""
 
 from dataclasses import dataclass
+import math
 
 import numpy as np
 
@@ -65,6 +66,22 @@ def convert_int16_channels(
     raise ValueError(
         f"Unsupported int16 channel conversion: {input_channels} -> {output_channels}."
     )
+
+
+def apply_int16_gain(pcm_data: bytes, gain_db: float) -> tuple[bytes, int]:
+    """Apply gain to PCM16, saturating safely and reporting clipped samples."""
+    if len(pcm_data) % 2 != 0:
+        raise ValueError("PCM16 gain input must contain complete 2-byte samples.")
+    if not math.isfinite(gain_db):
+        raise ValueError("PCM16 gain must be finite.")
+    if not pcm_data or gain_db == 0:
+        return pcm_data, 0
+    factor = 10.0 ** (gain_db / 20.0)
+    scaled = np.rint(
+        np.frombuffer(pcm_data, dtype="<i2").astype(np.float64) * factor
+    )
+    clipped = int(np.count_nonzero((scaled < -32768.0) | (scaled > 32767.0)))
+    return np.clip(scaled, -32768.0, 32767.0).astype("<i2").tobytes(), clipped
 
 
 def _mono_int16_to_stereo(pcm_data: bytes) -> bytes:

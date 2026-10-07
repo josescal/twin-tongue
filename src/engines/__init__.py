@@ -4,10 +4,14 @@ from engines.openai_realtime import (
     OpenAIRealtimeTranslationFactory,
     OpenAIRealtimeTranslationSession,
 )
-from engines.realtime_translation import RealtimeTranslationStatistics
+from engines.realtime_translation import (
+    RealtimeTranscriptDelta,
+    RealtimeTranslationStatistics,
+)
 
 __all__ = [
     "OpenAIRealtimeTranslationFactory",
     "OpenAIRealtimeTranslationSession",
+    "RealtimeTranscriptDelta",
     "RealtimeTranslationStatistics",
 ]

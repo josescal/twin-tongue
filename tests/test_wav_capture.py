@@ -14,6 +14,13 @@ from audio.wav_capture import (
 )
 
 
+def _first_nonzero_int16_frame(pcm: bytes) -> int:
+    for index in range(0, len(pcm), 2):
+        if pcm[index : index + 2] != b"\x00\x00":
+            return index // 2
+    raise AssertionError("PCM contains only silence")
+
+
 class DiagnosticWavCaptureTests(unittest.TestCase):
     def test_writes_pcm_int16_wav_file(self) -> None:
         with TemporaryDirectory() as temporary_directory:
@@ -84,6 +91,52 @@ class DiagnosticWavCaptureTests(unittest.TestCase):
             self.assertEqual([], list(directory.glob("*.jsonl")))
             with wave.open(str(files[0]), "rb") as wav_file:
                 self.assertEqual(6_400, wav_file.getnframes())
+
+    def test_tracks_share_sample_zero_and_pad_their_first_observation(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            origin = 100.0
+            captured = DiagnosticWavCapture(
+                enabled=True,
+                directory=directory,
+                pipeline_name="remote_to_agent",
+                stream_name="captured",
+                sample_rate=1_000,
+                session_id="aligned",
+                write_timing_marks=False,
+            )
+            played = DiagnosticWavCapture(
+                enabled=True,
+                directory=directory,
+                pipeline_name="remote_to_agent",
+                stream_name="played",
+                sample_rate=1_000,
+                session_id="aligned",
+                write_timing_marks=False,
+            )
+
+            captured.start_session(origin)
+            played.start_session(origin)
+            captured.write(
+                b"\x01\x00" * 20,
+                observed_at_monotonic=100.100,
+            )
+            played.write(
+                b"\x02\x00" * 20,
+                observed_at_monotonic=100.300,
+            )
+            captured.close()
+            played.close()
+
+            captured_path = directory / "remote_to_agent-captured-aligned.wav"
+            played_path = directory / "remote_to_agent-played-aligned.wav"
+            with wave.open(str(captured_path), "rb") as wav_file:
+                captured_pcm = wav_file.readframes(wav_file.getnframes())
+            with wave.open(str(played_path), "rb") as wav_file:
+                played_pcm = wav_file.readframes(wav_file.getnframes())
+
+            self.assertEqual(80, _first_nonzero_int16_frame(captured_pcm))
+            self.assertEqual(280, _first_nonzero_int16_frame(played_pcm))
 
     def test_pcm_blocks_are_batched_before_writing_to_disk(self) -> None:
         with TemporaryDirectory() as temporary_directory:

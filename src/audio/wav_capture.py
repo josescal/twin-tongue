@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 import json
 import logging
@@ -19,6 +20,17 @@ _CLOSE_SESSION = object()
 _SHUTDOWN = object()
 DEFAULT_WRITE_BUFFER_BYTES = 64 * 1024
 DEFAULT_FLUSH_INTERVAL_SECONDS = 0.5
+
+
+@dataclass(frozen=True)
+class _StartSession:
+    origin_monotonic: float
+
+
+@dataclass(frozen=True)
+class _TimedPcmBlock:
+    pcm: bytes
+    observed_at_monotonic: float
 
 
 def repair_incomplete_wav_headers(directory: Path) -> list[Path]:
@@ -135,6 +147,8 @@ class DiagnosticWavCapture:
         self._last_buffer_flush_monotonic = time.monotonic()
         self._last_write_monotonic: float | None = None
         self._files: list[Path] = []
+        self._timeline_origin_monotonic: float | None = None
+        self._timeline_prefix_written = False
 
     @property
     def enabled(self) -> bool:
@@ -145,7 +159,21 @@ class DiagnosticWavCapture:
     def files(self) -> tuple[Path, ...]:
         return tuple(self._files)
 
-    def write(self, pcm: bytes) -> None:
+    def start_session(self, origin_monotonic: float) -> None:
+        """Open a new file whose sample zero is shared with sibling tracks."""
+        if not self._enabled:
+            return
+        self.close()
+        self._timeline_origin_monotonic = origin_monotonic
+        self._timeline_prefix_written = False
+        self._rotate_file()
+
+    def write(
+        self,
+        pcm: bytes,
+        *,
+        observed_at_monotonic: float | None = None,
+    ) -> None:
         """Append one PCM block to the current WAV file."""
         if not self._enabled or not pcm:
             return
@@ -153,10 +181,22 @@ class DiagnosticWavCapture:
         if len(pcm) % bytes_per_frame:
             raise ValueError("WAV capture received an incomplete PCM frame.")
         frames = len(pcm) // bytes_per_frame
-        if self._writer is None or self._frames_written + frames > self._max_frames_per_file:
+        if (
+            self._writer is None
+            or self._frames_written + frames > self._max_frames_per_file
+        ):
             self._rotate_file()
         assert self._writer is not None
         write_monotonic = time.monotonic()
+        if not self._timeline_prefix_written:
+            self._write_timeline_prefix(
+                frames,
+                observed_at_monotonic=(
+                    write_monotonic
+                    if observed_at_monotonic is None
+                    else observed_at_monotonic
+                ),
+            )
         frame_start = self._frames_written
         self._pcm_buffer.extend(pcm)
         self._frames_written += frames
@@ -189,6 +229,39 @@ class DiagnosticWavCapture:
             >= self._flush_interval_seconds
         ):
             self.flush()
+
+    def _write_timeline_prefix(
+        self,
+        block_frames: int,
+        *,
+        observed_at_monotonic: float,
+    ) -> None:
+        """Pad the first block back to the shared recording-session origin."""
+        self._timeline_prefix_written = True
+        origin = self._timeline_origin_monotonic
+        if origin is None:
+            return
+        block_duration = block_frames / self._sample_rate
+        block_started_after_origin = max(
+            0.0,
+            observed_at_monotonic - origin - block_duration,
+        )
+        silence_frames = round(block_started_after_origin * self._sample_rate)
+        if silence_frames <= 0:
+            return
+        self._pcm_buffer.extend(
+            bytes(silence_frames * self._channels * self._sample_width_bytes)
+        )
+        self._frames_written += silence_frames
+        if self._write_timing_marks:
+            self._write_mark(
+                {
+                    "event": "timeline_prefix",
+                    "wav_frame_start": 0,
+                    "wav_frame_end": silence_frames,
+                    "duration_seconds": silence_frames / self._sample_rate,
+                }
+            )
 
     def flush(self) -> None:
         """Write accumulated PCM and timing marks in filesystem-friendly batches."""
@@ -349,9 +422,16 @@ class QueuedDiagnosticWavCapture:
             return
         self.start()
         try:
-            self._queue.put_nowait(bytes(pcm))
+            self._queue.put_nowait(_TimedPcmBlock(bytes(pcm), time.monotonic()))
         except Full:
             self.dropped_blocks += 1
+
+    def start_session(self, origin_monotonic: float) -> None:
+        """Start one timeline-aligned file set without blocking audio callbacks."""
+        if not self._enabled:
+            return
+        self.start()
+        self._queue.put(_StartSession(origin_monotonic))
 
     def close_session(self) -> None:
         """Drain queued blocks and close the current file."""
@@ -392,8 +472,14 @@ class QueuedDiagnosticWavCapture:
                         return
                     if item is _CLOSE_SESSION:
                         self._capture.close()
+                    elif isinstance(item, _StartSession):
+                        self._capture.start_session(item.origin_monotonic)
                     else:
-                        self._capture.write(item)  # type: ignore[arg-type]
+                        assert isinstance(item, _TimedPcmBlock)
+                        self._capture.write(
+                            item.pcm,
+                            observed_at_monotonic=item.observed_at_monotonic,
+                        )
                 finally:
                     self._queue.task_done()
         except Exception:

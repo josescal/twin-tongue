@@ -153,9 +153,9 @@ endpoints:
 - `agent_to_remote` watches the calling application capturing from
   `CABLE-B Output`.
 
-Enabling translation arms the direction without opening an API session. The
-session opens when the corresponding application session becomes active and
-receives continuous audio, including silence, for that stabilized call. The
+Enabling translation prewarms the API session without sending media. The
+session receives continuous audio, including silence, only when the corresponding
+application session becomes active for that stabilized call. The
 configured disconnect grace keeps the call state stable for AEC3 and diagnostics
 during short Windows monitoring gaps. When the grace expires, Twin Tongue
 flushes the input and closes the provider session gracefully before a future
@@ -164,7 +164,8 @@ API session.
 
 ## Diagnostic audio stages
 
-Each direction separates the evidence into five tracks:
+Each direction can expose five evidence stages. `audio_capture.tracks` selects
+which stages are actually written; the default is `captured` plus `played`.
 
 | Track | Exact meaning |
 |---|---|
@@ -176,8 +177,10 @@ Each direction separates the evidence into five tracks:
 
 Diagnostic capture also includes:
 
-- CABLE A recording even while the direction is in passthrough;
-- JSONL timing marks for each track;
+- CABLE A recording even while the direction is in passthrough when `captured`
+  is selected;
+- optional JSONL timing marks for each selected track;
+- a shared sample-zero origin with leading silence for cross-track alignment;
 - a per-call JSON manifest with devices, formats, opening/closing times,
   gate events, track paths, queue counters, AEC3 statistics, and per-intervention
   `accepted → sent → received → played` voice-onset latency;

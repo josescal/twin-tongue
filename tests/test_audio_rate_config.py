@@ -191,10 +191,11 @@ class AudioRateConfigurationTests(unittest.TestCase):
         )
         self.assertEqual(
             {
-                "enabled": True,
+                "enabled": False,
                 "directory": "logs/realtime-audio",
                 "max_seconds_per_file": 120.0,
-                "write_timing_marks": True,
+                "tracks": ["captured", "played"],
+                "write_timing_marks": False,
                 "queue_capacity_blocks": 500,
                 "write_buffer_kb": 64,
                 "flush_interval_seconds": 1.0,
@@ -208,9 +209,39 @@ class AudioRateConfigurationTests(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            500,
+            1500,
             config["realtime_translation"]["openai"][
                 "transcript_segment_idle_ms"
+            ],
+        )
+        self.assertEqual(
+            5000,
+            config["realtime_translation"]["openai"][
+                "transcript_alignment_wait_ms"
+            ],
+        )
+        self.assertEqual(
+            3000,
+            config["realtime_translation"]["openai"][
+                "provider_delay_warning_ms"
+            ],
+        )
+        self.assertEqual(
+            1500,
+            config["realtime_translation"]["openai"][
+                "provider_delay_recovery_ms"
+            ],
+        )
+        self.assertEqual(
+            0.0,
+            config["realtime_translation"]["directions"]["remote_to_agent"][
+                "output_gain_db"
+            ],
+        )
+        self.assertEqual(
+            6.0,
+            config["realtime_translation"]["directions"]["agent_to_remote"][
+                "output_gain_db"
             ],
         )
         self.assertEqual(
@@ -223,6 +254,7 @@ class AudioRateConfigurationTests(unittest.TestCase):
         self.assertEqual(
             {
                 "enabled": True,
+                "prewarm_session": True,
                 "disconnect_grace_seconds": 5.0,
             },
             config["realtime_translation"]["openai"]["session_gate"],
@@ -298,7 +330,7 @@ class AudioRateConfigurationTests(unittest.TestCase):
         source = (ROOT / "config" / "default.toml").read_text(encoding="utf-8")
         source = source.replace(
             "send_chunk_duration_ms = 200",
-            "send_chunk_duration_ms = 20",
+            "send_chunk_duration_ms = 40",
         )
         with TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"
@@ -306,6 +338,30 @@ class AudioRateConfigurationTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 ConfigurationError,
                 r"send_chunk_duration_ms must be 200",
+            ):
+                load_config(path)
+
+    def test_realtime_session_prewarming_is_enabled(self) -> None:
+        config = load_config(ROOT / "config" / "default.toml")
+
+        self.assertTrue(
+            config["realtime_translation"]["openai"]["session_gate"][
+                "prewarm_session"
+            ]
+        )
+
+    def test_realtime_diagnostic_tracks_must_be_known_and_unique(self) -> None:
+        source = (ROOT / "config" / "default.toml").read_text(encoding="utf-8")
+        source = source.replace(
+            'tracks = ["captured", "played"]',
+            'tracks = ["captured", "unknown", "captured"]',
+        )
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                r"audio_capture\.tracks must be a non-empty list",
             ):
                 load_config(path)
 

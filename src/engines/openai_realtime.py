@@ -15,7 +15,10 @@ from urllib.parse import urlencode
 import websockets
 from dotenv import load_dotenv
 
-from engines.realtime_translation import RealtimeTranslationStatistics
+from engines.realtime_translation import (
+    RealtimeTranscriptDelta,
+    RealtimeTranslationStatistics,
+)
 from providers.errors import ProviderConfigurationError, ProviderError
 
 
@@ -24,7 +27,10 @@ MAX_WEBSOCKET_MESSAGE_BYTES = 4 * 1024 * 1024
 WEBSOCKET_SEND_TIMEOUT_SECONDS = 2.0
 LEVEL_MEASUREMENT_INTERVAL_BLOCKS = 5
 AudioCallback = Callable[[bytes], Awaitable[None] | None]
-TranscriptCallback = Callable[[str], Awaitable[None] | None]
+TranscriptCallback = Callable[
+    [RealtimeTranscriptDelta],
+    Awaitable[None] | None,
+]
 
 
 class RealtimeTranslationError(ProviderError):
@@ -189,6 +195,7 @@ class OpenAIRealtimeTranslationSession:
         self.statistics.first_audio_latency_ms = None
         self.statistics.total_latency_ms = None
         self.statistics.reset_audio_levels()
+        self.statistics.reset_provider_timing()
         self._input_level_block_count = 0
         self._output_level_block_count = 0
         headers = {"Authorization": f"Bearer {self.api_key}"}
@@ -314,9 +321,10 @@ class OpenAIRealtimeTranslationSession:
                 self._session_closed.wait(), timeout=self.close_timeout_seconds
             )
         except TimeoutError:
-            LOGGER.warning(
+            LOGGER.info(
                 "event=realtime_session_close_timeout "
-                "waiting_for=session.closed timeout_seconds=%.1f action=abort",
+                "waiting_for=session.closed timeout_seconds=%.1f "
+                "action=abort impact=post_call_tail_only",
                 self.close_timeout_seconds,
             )
         except RealtimeTranslationError as error:
@@ -387,12 +395,24 @@ class OpenAIRealtimeTranslationSession:
                     await self._handle_audio_delta(event)
                 elif event_type == "session.input_transcript.delta":
                     delta = str(event.get("delta", ""))
+                    elapsed_ms = self._event_elapsed_ms(event)
+                    lag_ms = self._provider_lag_ms(elapsed_ms)
                     self.statistics.input_transcript_characters += len(delta)
-                    await self._invoke(self.on_input_transcript, delta)
+                    self.statistics.input_transcript_lag_ms = lag_ms
+                    await self._invoke(
+                        self.on_input_transcript,
+                        RealtimeTranscriptDelta(delta, elapsed_ms, lag_ms),
+                    )
                 elif event_type == "session.output_transcript.delta":
                     delta = str(event.get("delta", ""))
+                    elapsed_ms = self._event_elapsed_ms(event)
+                    lag_ms = self._provider_lag_ms(elapsed_ms)
                     self.statistics.output_transcript_characters += len(delta)
-                    await self._invoke(self.on_output_transcript, delta)
+                    self.statistics.output_transcript_lag_ms = lag_ms
+                    await self._invoke(
+                        self.on_output_transcript,
+                        RealtimeTranscriptDelta(delta, elapsed_ms, lag_ms),
+                    )
                 elif event_type == "session.closed":
                     self._session_closed.set()
                     self._session_ready.clear()
@@ -423,6 +443,10 @@ class OpenAIRealtimeTranslationSession:
         if len(pcm16) % 2:
             raise RealtimeTranslationError("Translated audio delta is not complete PCM16.")
         now = time.monotonic()
+        elapsed_ms = self._event_elapsed_ms(event)
+        provider_lag_ms = self._provider_lag_ms(elapsed_ms, now=now)
+        if provider_lag_ms is not None:
+            self.statistics.record_output_audio_lag(provider_lag_ms)
         if self.statistics.first_audio_latency_ms is None and self._first_input_at is not None:
             self.statistics.first_audio_latency_ms = (now - self._first_input_at) * 1000
         self._last_output_at = now
@@ -433,6 +457,32 @@ class OpenAIRealtimeTranslationSession:
         if self._output_level_block_count % LEVEL_MEASUREMENT_INTERVAL_BLOCKS == 1:
             self.statistics.record_output_level(pcm16)
         await self._invoke(self.on_audio, pcm16)
+
+    @staticmethod
+    def _event_elapsed_ms(event: dict[str, Any]) -> int | None:
+        value = event.get("elapsed_ms")
+        if (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value >= 0
+        ):
+            return int(value)
+        return None
+
+    def _provider_lag_ms(
+        self,
+        elapsed_ms: int | None,
+        *,
+        now: float | None = None,
+    ) -> float | None:
+        """Compare provider frame position with real elapsed stream time."""
+        if elapsed_ms is None or self._first_input_at is None:
+            return None
+        observed_at = time.monotonic() if now is None else now
+        return max(
+            0.0,
+            (observed_at - self._first_input_at) * 1000.0 - elapsed_ms,
+        )
 
     def _record_error(self, error: BaseException) -> None:
         self.statistics.errors += 1

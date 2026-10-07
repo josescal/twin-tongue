@@ -206,7 +206,11 @@ close_timeout_seconds = 5.0
 metrics_interval_seconds = 10.0
 log_transcript_deltas = false
 transcript_ui_update_interval_ms = 150
-transcript_segment_idle_ms = 500
+transcript_segment_idle_ms = 1500
+transcript_alignment_wait_ms = 5000
+provider_delay_warning_ms = 3000
+provider_delay_recovery_ms = 1500
+output_gain_db = 0.0
 
 [pipeline.speech_to_speech.defaults.translation.openai_realtime.adaptive_playout]
 enabled = true
@@ -225,16 +229,24 @@ enabled = true
 model = "gpt-realtime-whisper"
 
 [pipeline.speech_to_speech.defaults.translation.openai_realtime.audio_capture]
-enabled = true
+# Disabled for normal operation. When enabled (or started from the control panel),
+# only the selected tracks are written. "captured" is the source endpoint audio
+# and "played" is the final signal emitted after translation and local playout.
+# Both use one shared timeline so they can be imported together into Audacity.
+# Use the control-panel button for a controlled diagnostic call. Set this true
+# only when capture must start automatically with the Realtime pipeline.
+enabled = false
 directory = "logs/realtime-audio"
 max_seconds_per_file = 120.0
-write_timing_marks = true
+tracks = ["captured", "played"]
+write_timing_marks = false
 queue_capacity_blocks = 500
 write_buffer_kb = 64
 flush_interval_seconds = 1.0
 
 [pipeline.speech_to_speech.defaults.translation.openai_realtime.session_gate]
 enabled = true
+prewarm_session = true
 disconnect_grace_seconds = 5.0
 
 [pipeline.speech_to_speech.remote_to_agent.translation]
@@ -242,6 +254,11 @@ engine = "openai_realtime"
 
 [pipeline.speech_to_speech.agent_to_remote.translation]
 engine = "openai_realtime"
+
+[pipeline.speech_to_speech.agent_to_remote.translation.openai_realtime]
+# CABLE B was roughly 9.5 dB below the bot track in the 08:48 support call.
+# +6 dB improves bot-side detectability while retaining measured peak headroom.
+output_gain_db = 6.0
 
 [observability.logging]
 level = "INFO"

@@ -8,7 +8,7 @@ queue depth and callback measurements belong in the daily
 
 ```text
 2026-07-29 14:03:12.481 INFO [agent_to_remote]
-event=realtime_translation_session_prepared target_language=es audio_allowed=True
+event=realtime_translation_session_prepared target_language=es audio_allowed=False
 ```
 
 The line contains local timestamp, severity, affected direction, a stable
@@ -41,7 +41,7 @@ across consecutive rows.
 | `application_failed` | The application cannot continue normally. | Preserve traceback and preceding device/provider events. |
 | `translation_engine_started` | Supervisor selected the configured engine. | Confirm `openai_realtime` for the supported path. |
 | `pipeline_started` / `pipeline_stopped` | One direction opened/closed. | Confirm devices, formats and direction. |
-| `pipeline_status_changed` | Effective state changed. | Explains initializing, waiting, ready, draining, reconnecting and unavailable UI states. |
+| `pipeline_status_changed` | Effective state changed. | Explains initializing, waiting, ready, delayed, draining, reconnecting and unavailable UI states. |
 | `realtime_translation_pipeline_failed` | Unhandled Realtime direction failure. | Preserve traceback, metrics and manifest. |
 | `translation_pipeline_failed` | Supervisor observed a direction failure. | Correlate with the immediately preceding engine event. |
 
@@ -52,7 +52,8 @@ across consecutive rows.
 | `realtime_call_state_changed` | Stabilized gate permission changed; includes route, request and raw observation. | Verify the app uses CABLE-A Input/CABLE-B Output and compare gate metrics. |
 | `realtime_translation_mode_changed` | Translation was disabled; translated output drains before passthrough. | A short drain is normal; repeated or stuck draining is not. |
 | `realtime_translation_source_ended` | Source ended and graceful provider close began. | Look for successful teardown or a close/drain timeout. |
-| `realtime_translation_session_prepared` | WebSocket setup completed for the target language. | `audio_allowed=false` is valid while the call gate is closed. |
+| `realtime_translation_session_prepared` | WebSocket setup completed for the target language. | With prewarming, `audio_allowed=false` is the normal waiting-for-call state. |
+| `realtime_provider_delay_changed` | Aligned provider-audio lag entered or recovered from the configured delayed range. | Compare provider lag with local receive/playback backlog in Metrics. |
 
 ## Provider connection and retry
 
@@ -63,7 +64,6 @@ across consecutive rows.
 | `realtime_translation_send_failed` | A provider audio append failed. | Expect reconnect; inspect send drops and pending voice latency. |
 | `realtime_translation_session_error` | Provider sent a session error event. | Preserve provider code/message; avoid repeated toggles during rate limiting. |
 | `realtime_translation_retry_cycle_exhausted` | Fast attempts were consumed; cooldown begins. | Passthrough remains fallback. Resolve root cause and wait through cooldown. |
-| `realtime_session_close_timeout` | Graceful provider close exceeded its timeout. | Trailing translation may be incomplete. |
 | `realtime_session_close_failed` | Provider close failed for another reason. | Preserve the error and inspect the next session. |
 | `realtime_translation_send_drain_timeout` | Provider-bound frames did not drain on close. | Possible lost source tail; inspect send queue/network. |
 | `realtime_translation_receive_drain_timeout` | Returned audio did not drain on close. | Possible lost translated tail; inspect receive/playback backlog. |
@@ -86,8 +86,15 @@ after rate limits, preventing both directions from reconnecting in lockstep.
 | `webrtc_aec3_processing_failed` | AEC3 failed and microphone PCM was passed through. | Echo protection is degraded but speech is preserved. |
 | `webrtc_aec3_capture_bypassed` | A block did not meet AEC3 frame requirements. | Sustained occurrences are abnormal with 20 ms/48 kHz defaults. |
 
-Normal queue cleanup is DEBUG-level. Use Metrics for continuous pressure and
-INFO/WARNING recovery events for exceptional interventions.
+Normal queue cleanup is DEBUG-level. A high-watermark recovery remains WARNING
+while a call is active, but becomes DEBUG when `session.close` is only flushing
+post-call audio. The cumulative dropped duration and discontinuities remain in
+Metrics in both cases.
+
+`realtime_session_close_timeout` is INFO-level: the provider did not finish its
+post-call flush within the bounded wait, so Twin Tongue aborts the socket. It
+does not affect a call that has already ended; inspect the final receive-drop
+metrics only when trailing translation was expected to remain audible.
 
 ## Device and diagnostic evidence
 
@@ -95,10 +102,12 @@ INFO/WARNING recovery events for exceptional interventions.
 | --- | --- | --- |
 | `audio_input_stream_opened` / `audio_output_stream_opened` | Stream opened with device, mode, rate and channels. | Verify the intended endpoint and format. |
 | `audio_input_format_negotiated` | Physical capture selected a supported fallback format. | Confirm signal quality; canonical conversion remains automatic. |
+| `unsupported_initial_target_language` | A saved language is not a valid Realtime output and the role default was restored. | Confirm the recovered language in the panel before the call. |
 | `audio_device_changed` | Runtime switched an endpoint. | Correlate with incident time and callback gaps. |
 | `physical_audio_device_quarantined` | Preferred physical endpoint failed health checks and fallback was selected. | Test the quarantined device independently. |
 | `preferred_audio_device_unavailable` / `preferred_audio_device_replaced` | Saved device is absent and replacement is active. | Confirm selection in the panel. |
 | `audio_device_refresh_failed` / `audio_device_refresh_recovered` | Topology polling failed/recovered. | Short recovered failure may be transient; repeated failure needs host investigation. |
+| `realtime_diagnostic_audio_capture_changed` | Support started or stopped the configured Realtime WAV tracks; the event lists their names. | Correlate the active interval and selected evidence with the reproduced incident. |
 | `diagnostic_wav_capture_failed` | Recording stopped to protect live audio. | Check disk/permissions; live translation may remain healthy. |
 | `diagnostic_wav_header_repaired` | Interrupted WAV header was repaired. | Informational; inspect only if it belongs to the call. |
 | `diagnostic_call_manifest_closed` | Per-call evidence manifest finalized. | Use it to locate tracks and timeline. |

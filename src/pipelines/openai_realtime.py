@@ -19,6 +19,7 @@ from audio.diagnostic_manifest import (
     diagnostic_call_id,
 )
 from audio.pcm import (
+    apply_int16_gain,
     calculate_block_frames,
     convert_int16_channels,
 )
@@ -35,12 +36,14 @@ from engines.openai_realtime import (
     OpenAIRealtimeTranslationSession,
     is_realtime_rate_limit_error,
 )
+from engines.realtime_translation import RealtimeTranscriptDelta
 from metrics import CsvMetricsWriter
 
 
 LOGGER = logging.getLogger(__name__)
-TranscriptQueueItem = tuple[str, str, str, str] | None
-INCOMPLETE_TRANSCRIPT_IDLE_MULTIPLIER = 5
+TranscriptQueueItem = (
+    tuple[str, str, str, str, int | None, float | None] | None
+)
 
 
 @dataclass(frozen=True)
@@ -73,10 +76,12 @@ class RealtimeSessionGate:
         self,
         *,
         enabled: bool,
+        prewarm_session: bool = False,
         disconnect_grace_seconds: float,
         monitor_failure_grace_seconds: float,
     ) -> None:
         self.enabled = enabled
+        self.prewarm_session = prewarm_session
         self.disconnect_grace_seconds = disconnect_grace_seconds
         self.monitor_failure_grace_seconds = monitor_failure_grace_seconds
         self.activations = 0
@@ -138,7 +143,7 @@ class RealtimeSessionGate:
             )
         else:
             decision = RealtimeSessionGateDecision(
-                call_active,
+                call_active or self.prewarm_session,
                 call_active,
                 not call_active,
                 observation,
@@ -219,6 +224,11 @@ class OpenAIRealtimeTranslatePipeline:
         self._transcript_sequence = 0
         self._transcript_queue: asyncio.Queue[TranscriptQueueItem] | None = None
         self._log_transcript_deltas = False
+        self._provider_delay_active = False
+        self._provider_delay_warning_ms = 3_000.0
+        self._provider_delay_recovery_ms = 1_500.0
+        self._output_gain_db = 0.0
+        self._output_gain_clipped_samples = 0
         self._audio_send_queue: asyncio.Queue[bytes | None] | None = None
         self._audio_send_dropped_blocks = 0
         self._input_audio_capture: QueuedDiagnosticWavCapture | None = None
@@ -226,6 +236,10 @@ class OpenAIRealtimeTranslatePipeline:
         self._sent_audio_capture: QueuedDiagnosticWavCapture | None = None
         self._received_audio_capture: QueuedDiagnosticWavCapture | None = None
         self._output_audio_capture: QueuedDiagnosticWavCapture | None = None
+        self._diagnostic_tracks: tuple[str, ...] = ()
+        self._diagnostic_recording_configured = False
+        self._diagnostic_recording_active = False
+        self._diagnostic_capture_session_active = False
         self._call_cable_active = False
         self._speech_latency = StreamingSpeechLatencyTracker()
 
@@ -251,6 +265,7 @@ class OpenAIRealtimeTranslatePipeline:
         )
         session_gate = RealtimeSessionGate(
             enabled=bool(session_gate_settings["enabled"]),
+            prewarm_session=bool(session_gate_settings["prewarm_session"]),
             disconnect_grace_seconds=float(
                 session_gate_settings["disconnect_grace_seconds"]
             ),
@@ -353,14 +368,30 @@ class OpenAIRealtimeTranslatePipeline:
             maxsize=int(realtime["received_queue_capacity_blocks"])
         )
         self._adaptive_playout = dict(realtime["adaptive_playout"])
+        self._provider_delay_warning_ms = float(
+            realtime["provider_delay_warning_ms"]
+        )
+        self._provider_delay_recovery_ms = float(
+            realtime["provider_delay_recovery_ms"]
+        )
+        self._provider_delay_active = False
+        self._output_gain_db = float(realtime["output_gain_db"])
+        self._output_gain_clipped_samples = 0
         self._time_stretcher = StreamingWsola(api_rate)
         self._aec3_render_sample_rate = output_rate
         audio_capture_settings = dict(realtime["audio_capture"])
         capture_directory = Path(str(audio_capture_settings["directory"]))
         capture_enabled = bool(audio_capture_settings["enabled"])
+        self._diagnostic_tracks = tuple(
+            str(track) for track in audio_capture_settings["tracks"]
+        )
+        self._diagnostic_recording_configured = capture_enabled
         call_id = diagnostic_call_id()
         capture_options = {
-            "enabled": capture_enabled,
+            # Captures are armed but write nothing until the runtime recording
+            # control is active. This makes the support button work without a
+            # process restart while keeping normal operation disk-free.
+            "enabled": True,
             "directory": capture_directory,
             "pipeline_name": self.pipeline_name,
             "max_seconds_per_file": float(
@@ -382,43 +413,55 @@ class OpenAIRealtimeTranslatePipeline:
             "session_id": call_id,
             "log_file_creation": False,
         }
-        self._input_audio_capture = QueuedDiagnosticWavCapture(
-            **capture_options,
-            stream_name="captured",
+
+        def create_diagnostic_track(
+            stream_name: str,
+            *,
+            sample_rate: int,
+            channels: int,
+        ) -> QueuedDiagnosticWavCapture | None:
+            if stream_name not in self._diagnostic_tracks:
+                return None
+            return QueuedDiagnosticWavCapture(
+                **capture_options,
+                stream_name=stream_name,
+                sample_rate=sample_rate,
+                channels=channels,
+            )
+
+        self._input_audio_capture = create_diagnostic_track(
+            "captured",
             sample_rate=capture_rate,
             channels=capture_channels,
         )
-        self._accepted_audio_capture = QueuedDiagnosticWavCapture(
-            **capture_options,
-            stream_name="accepted",
+        self._accepted_audio_capture = create_diagnostic_track(
+            "accepted",
             sample_rate=capture_rate,
             channels=1,
         )
-        self._sent_audio_capture = QueuedDiagnosticWavCapture(
-            **capture_options,
-            stream_name="sent",
+        self._sent_audio_capture = create_diagnostic_track(
+            "sent",
             sample_rate=api_rate,
             channels=1,
         )
-        self._received_audio_capture = QueuedDiagnosticWavCapture(
-            **capture_options,
-            stream_name="received",
+        self._received_audio_capture = create_diagnostic_track(
+            "received",
             sample_rate=api_rate,
             channels=1,
         )
-        self._output_audio_capture = QueuedDiagnosticWavCapture(
-            **capture_options,
-            stream_name="played",
+        self._output_audio_capture = create_diagnostic_track(
+            "played",
             sample_rate=output_rate,
             channels=output_channels,
         )
+        self._diagnostic_capture_session_active = False
         self._call_cable_active = False
         output.played_observer = lambda block: self._record_played_audio(
             block,
             output_channels,
         )
         self._diagnostic_manifest = DiagnosticCallManifest(
-            enabled=capture_enabled,
+            enabled=False,
             directory=capture_directory,
             pipeline_name=self.pipeline_name,
             call_id=call_id,
@@ -427,38 +470,37 @@ class OpenAIRealtimeTranslatePipeline:
                 "output": format_device(output_device),
             },
             formats={
-                "captured": {
-                    "sample_rate": capture_rate,
-                    "channels": capture_channels,
-                    "format": str(audio["sample_format"]),
-                    "exclusive": capture.exclusive,
-                },
-                "accepted": {"sample_rate": capture_rate, "channels": 1},
-                "sent": {"sample_rate": api_rate, "channels": 1},
-                "received": {"sample_rate": api_rate, "channels": 1},
-                "played": {
-                    "sample_rate": output_rate,
-                    "channels": output_channels,
-                    "exclusive": output.exclusive,
-                },
+                name: audio_format
+                for name, audio_format in {
+                    "captured": {
+                        "sample_rate": capture_rate,
+                        "channels": capture_channels,
+                        "format": str(audio["sample_format"]),
+                        "exclusive": capture.exclusive,
+                    },
+                    "accepted": {"sample_rate": capture_rate, "channels": 1},
+                    "sent": {"sample_rate": api_rate, "channels": 1},
+                    "received": {"sample_rate": api_rate, "channels": 1},
+                    "played": {
+                        "sample_rate": output_rate,
+                        "channels": output_channels,
+                        "exclusive": output.exclusive,
+                    },
+                }.items()
+                if name in self._diagnostic_tracks
             },
         )
-        if capture_enabled:
-            LOGGER.info(
-                "event=realtime_diagnostic_audio_capture_enabled directory=%s "
-                "streams=captured,accepted,sent,received,played",
-                capture_directory,
-            )
+        self._sync_diagnostic_recording()
         self._log_transcript_deltas = bool(realtime["log_transcript_deltas"])
         self._transcript_queue = asyncio.Queue()
         session = self.session_factory.create(
             pipeline_name=self.pipeline_name,
             on_audio=self._enqueue_translated_audio,
-            on_input_transcript=lambda delta: self._enqueue_transcript_delta(
-                "input", delta
+            on_input_transcript=lambda event: self._enqueue_transcript_delta(
+                "input", event
             ),
-            on_output_transcript=lambda delta: self._enqueue_transcript_delta(
-                "output", delta
+            on_output_transcript=lambda event: self._enqueue_transcript_delta(
+                "output", event
             ),
         )
         self._audio_send_queue = asyncio.Queue(
@@ -479,6 +521,9 @@ class OpenAIRealtimeTranslatePipeline:
                 ),
                 segment_idle_seconds=(
                     float(realtime["transcript_segment_idle_ms"]) / 1000
+                ),
+                alignment_wait_seconds=(
+                    float(realtime["transcript_alignment_wait_ms"]) / 1000
                 ),
             ),
             name=f"{self.pipeline_name} realtime transcript publisher",
@@ -520,6 +565,7 @@ class OpenAIRealtimeTranslatePipeline:
                     observation=session_observation,
                     now=now,
                 )
+                self._sync_diagnostic_recording()
                 self._set_call_cable_active(gate_decision.call_active)
                 if close_task is not None and close_task.done():
                     try:
@@ -560,6 +606,15 @@ class OpenAIRealtimeTranslatePipeline:
                             active=gate_decision.audio_allowed,
                             application_session=session_observation,
                             call_active=gate_decision.call_active,
+                        )
+                    if (
+                        gate_decision.audio_allowed
+                        and previous_gate_audio_allowed is not True
+                    ):
+                        self._prepare_call_audio_start(
+                            input_resampler,
+                            passthrough_resampler,
+                            output,
                         )
                     if (
                         previous_gate_audio_allowed is True
@@ -704,6 +759,9 @@ class OpenAIRealtimeTranslatePipeline:
                             await self._reconcile_gate_status(
                                 gate_decision,
                                 session_usable=True,
+                                provider_delayed=self._refresh_provider_delay(
+                                    session
+                                ),
                             )
                             LOGGER.info(
                                 "event=realtime_translation_session_prepared "
@@ -763,6 +821,7 @@ class OpenAIRealtimeTranslatePipeline:
                             and close_task is None
                         ),
                         draining=close_task is not None,
+                        provider_delayed=self._refresh_provider_delay(session),
                     )
 
                 block = await capture.wait_for_block(timeout_seconds=0.05)
@@ -786,6 +845,9 @@ class OpenAIRealtimeTranslatePipeline:
                         and session.connected
                         and close_task is None
                     ):
+                        # Translation sessions have a continuous media timeline.
+                        # Forward every captured block, including digital silence;
+                        # VAD-gating would collapse real pauses and break alignment.
                         for api_block in input_resampler.process(accepted):
                             self._enqueue_audio_for_translation(api_block)
                     elif close_task is None:
@@ -956,10 +1018,11 @@ class OpenAIRealtimeTranslatePipeline:
                     ("received", self._received_audio_capture),
                     ("played", self._output_audio_capture),
                 )
-                if capture_item is not None
+                if capture_item is not None and capture_item.files
             }
             aec3_statistics = self.aec3.statistics_snapshot()
-            if self._diagnostic_manifest is not None:
+            if self._diagnostic_manifest is not None and tracks:
+                self._diagnostic_manifest.enabled = True
                 manifest_path = self._diagnostic_manifest.close(
                     tracks=tracks,
                     statistics={
@@ -1011,13 +1074,21 @@ class OpenAIRealtimeTranslatePipeline:
     def _record_captured_audio(self, pcm16: bytes) -> None:
         """Record raw endpoint PCM, including CABLE A during passthrough."""
         capture = self._input_audio_capture
-        if self._call_cable_active and capture is not None:
+        if (
+            self._diagnostic_recording_active
+            and self._call_cable_active
+            and capture is not None
+        ):
             capture.write(pcm16)
 
     def _record_accepted_audio(self, pcm16_mono: bytes) -> None:
         """Record canonical mono PCM after echo rejection."""
         capture = self._accepted_audio_capture
-        if self._call_cable_active and capture is not None:
+        if (
+            self._diagnostic_recording_active
+            and self._call_cable_active
+            and capture is not None
+        ):
             capture.write(pcm16_mono)
         if self._call_cable_active and self._accept_translated_audio:
             self._observe_speech_latency("accepted", pcm16_mono)
@@ -1025,7 +1096,11 @@ class OpenAIRealtimeTranslatePipeline:
     def _record_played_audio(self, pcm16: bytes, channels: int) -> None:
         """Record actual playback and publish it as the far-end AEC reference."""
         capture = self._output_audio_capture
-        if self._call_cable_active and capture is not None:
+        if (
+            self._diagnostic_recording_active
+            and self._call_cable_active
+            and capture is not None
+        ):
             capture.write(pcm16)
         if self._call_cable_active and self._accept_translated_audio:
             self._observe_speech_latency("played", pcm16)
@@ -1049,7 +1124,11 @@ class OpenAIRealtimeTranslatePipeline:
     def _record_sent_audio(self, pcm16: bytes) -> None:
         """Record audio accepted by the API only while a call cable is active."""
         capture = self._sent_audio_capture
-        if self._call_cable_active and capture is not None:
+        if (
+            self._diagnostic_recording_active
+            and self._call_cable_active
+            and capture is not None
+        ):
             capture.write(pcm16)
         if self._call_cable_active:
             self._observe_speech_latency("sent", pcm16)
@@ -1057,7 +1136,11 @@ class OpenAIRealtimeTranslatePipeline:
     def _record_received_audio(self, pcm16: bytes) -> None:
         """Record mono PCM received from the provider before local resampling."""
         capture = self._received_audio_capture
-        if self._call_cable_active and capture is not None:
+        if (
+            self._diagnostic_recording_active
+            and self._call_cable_active
+            and capture is not None
+        ):
             capture.write(pcm16)
         if self._call_cable_active and self._accept_translated_audio:
             self._observe_speech_latency("received", pcm16)
@@ -1081,17 +1164,73 @@ class OpenAIRealtimeTranslatePipeline:
                 "diagnostic_call_capture_changed",
                 active=active,
             )
-        if active:
-            return
-        for capture in (
-            self._input_audio_capture,
-            self._accepted_audio_capture,
-            self._sent_audio_capture,
-            self._received_audio_capture,
-            self._output_audio_capture,
+        self._sync_diagnostic_capture_session()
+
+    def _diagnostic_captures(
+        self,
+    ) -> tuple[QueuedDiagnosticWavCapture, ...]:
+        return tuple(
+            capture
+            for capture in (
+                self._input_audio_capture,
+                self._accepted_audio_capture,
+                self._sent_audio_capture,
+                self._received_audio_capture,
+                self._output_audio_capture,
+            )
+            if capture is not None
+        )
+
+    def _sync_diagnostic_capture_session(self) -> None:
+        """Give every selected WAV one common sample-zero recording origin."""
+        should_be_active = (
+            self._diagnostic_recording_active and self._call_cable_active
+        )
+        if should_be_active == getattr(
+            self, "_diagnostic_capture_session_active", False
         ):
-            if capture is not None:
-                capture.close_session()
+            return
+        self._diagnostic_capture_session_active = should_be_active
+        captures = self._diagnostic_captures()
+        if should_be_active:
+            origin_monotonic = time.monotonic()
+            for capture in captures:
+                capture.start_session(origin_monotonic)
+            if self._diagnostic_manifest is not None:
+                self._diagnostic_manifest.event(
+                    "diagnostic_timeline_started",
+                    tracks=list(getattr(self, "_diagnostic_tracks", ())),
+                )
+            return
+        for capture in captures:
+            capture.close_session()
+
+    def _sync_diagnostic_recording(self) -> None:
+        """Apply the live support recording control without restarting audio."""
+        manual_active = (
+            self.control_state is not None
+            and self.control_state.is_audio_recording_active_for(self.pipeline_name)
+        )
+        active = self._diagnostic_recording_configured or manual_active
+        if active == self._diagnostic_recording_active:
+            return
+        self._diagnostic_recording_active = active
+        LOGGER.info(
+            "event=realtime_diagnostic_audio_capture_changed active=%s "
+            "streams=%s",
+            active,
+            ",".join(getattr(self, "_diagnostic_tracks", ())) or "none",
+        )
+        if self._diagnostic_manifest is not None:
+            if active:
+                self._diagnostic_manifest.enabled = True
+            self._diagnostic_manifest.event(
+                "diagnostic_audio_capture_changed",
+                active=active,
+            )
+            if not active:
+                self._diagnostic_manifest.enabled = False
+        self._sync_diagnostic_capture_session()
 
     def _set_translation_audio_acceptance(self, active: bool) -> None:
         """Enable translated output and reset incomplete latency pairings on edges."""
@@ -1100,10 +1239,24 @@ class OpenAIRealtimeTranslatePipeline:
         if active == previous:
             return
         if not active:
+            self._provider_delay_active = False
             self._discard_translated_audio_queue("translation_audio_disabled")
         speech_latency = getattr(self, "_speech_latency", None)
         if speech_latency is not None:
             speech_latency.reset_stream()
+
+    def _prepare_call_audio_start(
+        self,
+        input_resampler: PcmInt16Resampler,
+        passthrough_resampler: PcmInt16Resampler,
+        output: QueuedAudioOutput,
+    ) -> None:
+        """Remove pre-call media before a prewarmed session starts translation."""
+        passthrough_resampler.reset()
+        output.discard_pending_blocks()
+        self._discard_audio_send_queue("call_audio_gate_opened")
+        input_resampler.reset()
+        self._translated_resampler.reset()
 
     def _observe_speech_latency(self, stage: str, pcm16: bytes) -> None:
         tracker = getattr(self, "_speech_latency", None)
@@ -1325,15 +1478,25 @@ class OpenAIRealtimeTranslatePipeline:
         output = getattr(self, "_translated_output", None)
         if output is not None:
             output.mark_discontinuity()
-        LOGGER.warning(
+        message = (
             "event=realtime_translation_backlog_recovered "
             "reason=received_queue_high_watermark dropped_blocks=%s "
-            "retained_blocks=%s boundary_rms_dbfs=%.1f silence_boundary=%s",
+            "retained_blocks=%s boundary_rms_dbfs=%.1f silence_boundary=%s"
+        )
+        arguments = (
             cut,
             len(retained),
             quietest_dbfs,
             quietest_dbfs <= silence_threshold,
         )
+        if self._call_cable_active:
+            LOGGER.warning(message, *arguments)
+        else:
+            # session.close may flush provider output faster than physical
+            # playback after the call route has already disappeared. Metrics
+            # retain the discarded duration; repeating warnings here would
+            # describe post-call cleanup as a live audio incident.
+            LOGGER.debug(message, *arguments)
 
     def _discard_translated_audio_queue(
         self,
@@ -1424,6 +1587,9 @@ class OpenAIRealtimeTranslatePipeline:
                     )
                 if item.final:
                     for final_block in resampler.process(b"", final=True):
+                        final_block = self._apply_translated_output_gain(
+                            final_block
+                        )
                         converted = convert_int16_channels(
                             final_block,
                             1,
@@ -1451,6 +1617,7 @@ class OpenAIRealtimeTranslatePipeline:
         resampler: PcmInt16Resampler,
     ) -> None:
         for block in resampler.process(pcm16):
+            block = self._apply_translated_output_gain(block)
             converted = convert_int16_channels(
                 block, 1, self._translated_output_channels
             )
@@ -1461,6 +1628,18 @@ class OpenAIRealtimeTranslatePipeline:
             ):
                 return
             self._push_output_block(output, converted, source="translated")
+
+    def _apply_translated_output_gain(self, pcm16: bytes) -> bytes:
+        """Raise translated playout level with saturating PCM16 arithmetic."""
+        amplified, clipped_samples = apply_int16_gain(
+            pcm16,
+            getattr(self, "_output_gain_db", 0.0),
+        )
+        self._output_gain_clipped_samples = (
+            getattr(self, "_output_gain_clipped_samples", 0)
+            + clipped_samples
+        )
+        return amplified
 
     async def _wait_for_playback_capacity(
         self,
@@ -1564,32 +1743,47 @@ class OpenAIRealtimeTranslatePipeline:
         fraction = index - lower
         return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
 
-    def _enqueue_transcript_delta(self, direction: str, delta: str) -> None:
+    def _enqueue_transcript_delta(
+        self,
+        direction: str,
+        delta: RealtimeTranscriptDelta | str,
+    ) -> None:
         """Queue transcript text without delaying WebSocket audio reception."""
+        if isinstance(delta, RealtimeTranscriptDelta):
+            text = delta.text
+            elapsed_ms = delta.elapsed_ms
+            provider_lag_ms = delta.provider_lag_ms
+        else:
+            text = delta
+            elapsed_ms = None
+            provider_lag_ms = None
         if self._log_transcript_deltas:
-            self._log_transcript(direction, delta)
+            self._log_transcript(direction, text)
         queue = self._transcript_queue
-        if queue is None or not delta:
+        if queue is None or not text:
             return
         queue.put_nowait(
             (
                 direction,
-                delta,
+                text,
                 self._current_language(self.source_language_name),
                 self._current_language(self.target_language_name),
+                elapsed_ms,
+                provider_lag_ms,
             )
         )
 
     def _enqueue_transcript_boundary(self) -> None:
         queue = self._transcript_queue
         if queue is not None:
-            queue.put_nowait(("boundary", "", "", ""))
+            queue.put_nowait(("boundary", "", "", "", None, None))
 
     async def _transcript_worker(
         self,
         *,
         update_interval_seconds: float,
         segment_idle_seconds: float,
+        alignment_wait_seconds: float | None = None,
     ) -> None:
         """Coalesce transcript deltas and publish bounded UI state updates."""
         queue = self._transcript_queue
@@ -1602,12 +1796,20 @@ class OpenAIRealtimeTranslatePipeline:
         transcript_id: int | None = None
         last_delta_at: float | None = None
         last_publish_at = 0.0
+        source_elapsed_ms: int | None = None
+        output_elapsed_ms: int | None = None
         dirty = False
+        alignment_wait = (
+            max(segment_idle_seconds, alignment_wait_seconds)
+            if alignment_wait_seconds is not None
+            else segment_idle_seconds * 30
+        )
 
         def reset() -> None:
             nonlocal source_parts, translated_parts
             nonlocal source_language, target_language, transcript_id
             nonlocal last_delta_at, last_publish_at, dirty
+            nonlocal source_elapsed_ms, output_elapsed_ms
             source_parts = []
             translated_parts = []
             source_language = ""
@@ -1615,6 +1817,8 @@ class OpenAIRealtimeTranslatePipeline:
             transcript_id = None
             last_delta_at = None
             last_publish_at = 0.0
+            source_elapsed_ms = None
+            output_elapsed_ms = None
             dirty = False
 
         def publish(*, final: bool) -> None:
@@ -1646,18 +1850,32 @@ class OpenAIRealtimeTranslatePipeline:
                     max(0.0, update_interval_seconds - (now - last_publish_at))
                 )
             if last_delta_at is not None:
-                timeouts.append(max(0.0, segment_idle_seconds - (now - last_delta_at)))
+                finalization_idle = (
+                    segment_idle_seconds
+                    if source_parts and translated_parts
+                    else alignment_wait
+                )
+                timeouts.append(
+                    max(0.0, finalization_idle - (now - last_delta_at))
+                )
             timeout = max(0.001, min(timeouts))
             try:
                 item = await asyncio.wait_for(queue.get(), timeout=timeout)
             except TimeoutError:
-                item = ("tick", "", "", "")
+                item = ("tick", "", "", "", None, None)
 
             if item is None:
                 publish(final=True)
                 return
 
-            direction, delta, item_source_language, item_target_language = item
+            (
+                direction,
+                delta,
+                item_source_language,
+                item_target_language,
+                elapsed_ms,
+                _provider_lag_ms,
+            ) = item
             now = time.monotonic()
             if direction == "boundary":
                 publish(final=True)
@@ -1676,10 +1894,28 @@ class OpenAIRealtimeTranslatePipeline:
                     transcript_id = self._transcript_sequence
                     source_language = item_source_language
                     target_language = item_target_language
+                opposite_elapsed_ms = (
+                    output_elapsed_ms if direction == "input" else source_elapsed_ms
+                )
+                if (
+                    transcript_id is not None
+                    and elapsed_ms is not None
+                    and opposite_elapsed_ms is not None
+                    and abs(elapsed_ms - opposite_elapsed_ms)
+                    > alignment_wait * 1000
+                ):
+                    publish(final=True)
+                    reset()
+                    self._transcript_sequence += 1
+                    transcript_id = self._transcript_sequence
+                    source_language = item_source_language
+                    target_language = item_target_language
                 if direction == "input":
                     source_parts.append(delta)
+                    source_elapsed_ms = elapsed_ms
                 elif direction == "output":
                     translated_parts.append(delta)
+                    output_elapsed_ms = elapsed_ms
                 else:
                     continue
                 dirty = True
@@ -1690,9 +1926,8 @@ class OpenAIRealtimeTranslatePipeline:
                 and now - last_delta_at
                 >= (
                     segment_idle_seconds
-                    if translated_parts
-                    else segment_idle_seconds
-                    * INCOMPLETE_TRANSCRIPT_IDLE_MULTIPLIER
+                    if source_parts and translated_parts
+                    else alignment_wait
                 )
             ):
                 publish(final=True)
@@ -1828,6 +2063,34 @@ class OpenAIRealtimeTranslatePipeline:
             "realtime_output_peak_amplitude": (
                 session.statistics.output_peak_amplitude
             ),
+            "realtime_provider_input_transcript_lag_ms": (
+                session.statistics.input_transcript_lag_ms
+                if session.statistics.input_transcript_lag_ms is not None
+                else ""
+            ),
+            "realtime_provider_output_transcript_lag_ms": (
+                session.statistics.output_transcript_lag_ms
+                if session.statistics.output_transcript_lag_ms is not None
+                else ""
+            ),
+            "realtime_provider_audio_lag_ms": (
+                session.statistics.output_audio_lag_ms
+                if session.statistics.output_audio_lag_ms is not None
+                else ""
+            ),
+            "realtime_provider_audio_lag_p95_ms": (
+                session.statistics.output_audio_lag_percentile(0.95)
+                if session.statistics.output_audio_lag_ms is not None
+                else ""
+            ),
+            "realtime_provider_audio_maximum_lag_ms": (
+                session.statistics.output_audio_maximum_lag_ms
+            ),
+            "realtime_provider_delayed": self._provider_delay_active,
+            "realtime_output_gain_db": self._output_gain_db,
+            "realtime_output_gain_clipped_samples": (
+                self._output_gain_clipped_samples
+            ),
             "realtime_errors": session.statistics.errors,
             "realtime_reconnections": session.statistics.reconnections,
             "realtime_input_transcript_characters": (
@@ -1926,6 +2189,7 @@ class OpenAIRealtimeTranslatePipeline:
         *,
         session_usable: bool,
         draining: bool = False,
+        provider_delayed: bool = False,
     ) -> None:
         """Publish call presence without discarding a graceful provider drain."""
         if decision.waiting_for_application:
@@ -1934,9 +2198,45 @@ class OpenAIRealtimeTranslatePipeline:
             await self._set_status("waiting_for_call")
         elif decision.audio_allowed and session_usable:
             self._set_translation_audio_acceptance(True)
-            await self._set_status("translation_ready")
+            await self._set_status(
+                "translation_delayed"
+                if provider_delayed
+                else "translation_ready"
+            )
         elif not session_usable:
             self._set_translation_audio_acceptance(False)
+
+    def _refresh_provider_delay(
+        self,
+        session: OpenAIRealtimeTranslationSession,
+    ) -> bool:
+        """Apply hysteresis to semantic output lag for stable UI status."""
+        # Audio ``elapsed_ms`` follows generated output duration rather than the
+        # continuous input timeline. Comparing it with wall time therefore turns
+        # ordinary silence into an ever-growing delay. Transcript elapsed time
+        # remains aligned with the source stream and is safe for this status.
+        lag_ms = session.statistics.output_transcript_lag_ms
+        if lag_ms is None:
+            return self._provider_delay_active
+        previous = self._provider_delay_active
+        if previous:
+            self._provider_delay_active = (
+                lag_ms > self._provider_delay_recovery_ms
+            )
+        else:
+            self._provider_delay_active = (
+                lag_ms >= self._provider_delay_warning_ms
+            )
+        if previous != self._provider_delay_active:
+            LOGGER.info(
+                "event=realtime_provider_delay_changed delayed=%s "
+                "lag_ms=%.1f warning_ms=%.1f recovery_ms=%.1f",
+                self._provider_delay_active,
+                lag_ms,
+                self._provider_delay_warning_ms,
+                self._provider_delay_recovery_ms,
+            )
+        return self._provider_delay_active
 
     def _log_transcript(self, direction: str, delta: str) -> None:
         LOGGER.debug(

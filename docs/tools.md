@@ -280,15 +280,16 @@ Then:
 7. Disable it, then repeat for the opposite direction.
 
 Without a connected application, `waiting for a call` is expected and no OpenAI
-session should be created. When Realtime diagnostic capture is enabled, it
-writes `captured`, `accepted`, `sent`, `received`, `played` and a call manifest
-below `logs/realtime-audio`.
+audio should be sent. With prewarming enabled, an idle OpenAI session may already
+be connected. When Realtime diagnostic capture is enabled, it writes the tracks
+selected by `audio_capture.tracks` and a call manifest below
+`logs/realtime-audio`. The default selection is `captured` and `played`.
 
 Use:
 
 - the [metrics reference](metrics-reference.md) for queues, signal and latency;
 - the [log event reference](log-events-reference.md) for state/retry/recovery;
-- the five tracks to locate where audio changed or disappeared.
+- the configured tracks to locate where audio changed or disappeared.
 
 ## Common failures
 
